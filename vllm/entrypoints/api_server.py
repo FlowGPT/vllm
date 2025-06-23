@@ -97,6 +97,11 @@ def build_app(args: Namespace) -> FastAPI:
     global app
 
     app.root_path = args.root_path
+
+    # ✅ 注册自定义 /v1/score 接口
+    from vllm.entrypoints.openai import serving_score
+    app.include_router(serving_score.router)
+    
     return app
 
 
