@@ -1,0 +1,31 @@
+FROM vllm/vllm-openai:v0.9.1
+
+WORKDIR /app/vllm
+
+# 安装依赖
+RUN apt-get update && apt-get install -y git curl vim && rm -rf /var/lib/apt/lists/*
+
+# ✅ 添加 numpy 依赖（否则 torch 会报错找不到 numpy）
+RUN pip install numpy
+# 安装 flash-attn 库
+RUN pip install flash-attn
+# 拷贝你的 vllm 源码与模型
+COPY . /app/
+WORKDIR /app
+RUN VLLM_USE_PRECOMPILED=1 pip install .
+
+# 暴露端口
+EXPOSE 8080
+
+
+# 设置启动命令（注意这里使用 openai.api_server）
+ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+
+CMD [\
+  "--model", "kaonai/Qwen3-0.6B-rm",\
+  "--port", "8080",\
+  "--root-path", "/api",\
+  "--served-model-name", "kaonai/Qwen3-0.6B-rm",\
+  "--trust-remote-code",\
+  "--task", "embed"\
+]
