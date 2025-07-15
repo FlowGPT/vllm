@@ -2,24 +2,18 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from vllm.sampling_params import SamplingParams
 from vllm.triton_utils import tl, triton
-import os
 
 _SAMPLING_EPS = 1e-5
 
-def is_spec_decode_supported(req_id: str, input_batch: InputBatch) -> bool:
-    if req_id in input_batch.min_p_reqs:
-        # Spec decode doesn't support min_p sampling.
-        return os.environ.get("VLLM_SPEC_DECODE_MIN_P_SUPPORTED", "false").lower() == "true"
-    elif (req_id in input_batch.frequency_penalties_reqs
-          or req_id in input_batch.presence_penalties_reqs
-          or req_id in input_batch.repetition_penalties_reqs):
-        # Spec decode doesn't support penalties.
-        return False
-    elif req_id in input_batch.num_logprobs:
-        # Spec decode doesn't support logprobs.
-        return False
 
-    return True
+def is_spec_decode_unsupported(sampling_params: SamplingParams) -> bool:
+    """True if request is incompatible with speculative decoding"""
+    return (sampling_params.frequency_penalty != 0.0
+            or sampling_params.presence_penalty != 0.0
+            or sampling_params.repetition_penalty != 1.0
+            or sampling_params.min_p > _SAMPLING_EPS
+            or sampling_params.logprobs is not None)
+
 
 @triton.jit
 def prepare_eagle_input_kernel(
