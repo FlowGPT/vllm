@@ -1,0 +1,7 @@
+FROM vllm/vllm-openai:v0.8.5.post1
+
+WOKRDIR /app/vllm
+
+COPY . .
+
+RUN VLLM_USE_PRECOMPILED=1 pip install --editable .
