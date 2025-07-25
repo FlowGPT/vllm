@@ -4,4 +4,6 @@ WORKDIR /app/vllm
 
 COPY . .
 
+ENV VLLM_PRECOMPILED_WHEEL_LOCATION=https://files.pythonhosted.org/packages/47/07/e8822ca825f88aec61a7af6210b85cd0e0a4d6f757081d3282f32b1b0912/vllm-0.8.5.post1-cp38-abi3-manylinux1_x86_64.whl
+
 RUN VLLM_USE_PRECOMPILED=1 pip install --editable .
