@@ -1,6 +1,6 @@
 FROM vllm/vllm-openai:v0.8.5.post1
 
-WOKRDIR /app/vllm
+WORKDIR /app/vllm
 
 COPY . .
 
