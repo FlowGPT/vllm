@@ -67,6 +67,9 @@ def apply_penalties(logits: torch.Tensor, prompt_tokens_tensor: torch.Tensor,
     frequency_penalties: The frequency penalties of shape (num_seqs, )
     repetition_penalties: The repetition penalties of shape (num_seqs, )
     """
+
+    #print("output tokens tensor:")
+    #print(output_tokens_tensor)
     num_seqs, vocab_size = logits.shape
     _, prompt_mask = get_token_bin_counts_and_mask(prompt_tokens_tensor,
                                                    vocab_size, num_seqs)
