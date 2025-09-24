@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional, overload
 
 from vllm.distributed.kv_events import KVCacheEvent
@@ -24,25 +24,29 @@ class KVCacheStats:
     total_requests: int = 0
     cached_blocks: int = 0
     total_blocks: int = 0
-    request_ids: set[str] = set()
-    convid2time:dict[str,datetime] = {}
+    request_ids: set[str] = field(default_factory=set)
+    convid2time:dict[str,datetime] = field(default_factory=dict)
 
     def update_stats(self, req_id:str, total_blocks: int, hit_cached_blocks: int = 0):
+        if total_blocks == 0:
+            return
+
         if req_id in self.request_ids:
-            raise ValueError(f"Request {req_id} already exists in stats.")
+            logger.warning(f"Request {req_id} already exists in stats.")
+            return
         self.request_ids.add(req_id)
 
         convid = req_id.split('#')[1]
-        if convid != "null":
+        if convid != "null-0":
             if convid not in self.convid2time:
                 self.convid2time[convid] = datetime.now()
-                logger.info(f"first convid {convid} at {self.convid2time[convid]} and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks}")
+                logger.info(f"first convid {convid} at {self.convid2time[convid]} and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks:.3f}")
             else:
                 last_seen = self.convid2time[convid]
                 cur = datetime.now()
                 interval = (cur - last_seen).total_seconds()
                 self.convid2time[convid] = cur
-                logger.info(f"after {interval} seconds {convid} seen and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks}")
+                logger.info(f"after {interval} seconds {convid} seen and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks:.3f}")
         else:
             logger.warning(f"request {req_id} has null convid")
 
@@ -63,7 +67,7 @@ class KVCacheStats:
         logger.info(f"  Total Requests: {self.total_requests}")
         logger.info(f"  Hit Blocks: {self.cached_blocks}")
         logger.info(f"  Total Blocks: {self.total_blocks}")
-        logger.info(f"  Average hit block ratio: {self.cached_blocks / self.total_blocks:.2f}")
+        logger.info(f"  Average hit block ratio: {self.cached_blocks / self.total_blocks:.3f}")
 
     def reset(self):
         """
@@ -463,17 +467,3 @@ class KVCacheManager:
         return KVCacheBlocks(tuple([]
                                    for _ in range(self.num_kv_cache_groups)))
 
-    def get_kv_cache_stats(self) -> KVCacheStats:
-        """
-        Get the current KVCache statistics.
-    
-        Returns:
-            KVCacheStats: The current statistics
-        """
-        return self.kv_cache_stats
-
-    def reset_kv_cache_stats(self) -> None:
-        """
-        Reset the KVCache statistics.
-        """
-        self.kv_cache_stats.reset()

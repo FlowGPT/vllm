@@ -117,6 +117,8 @@ class OpenAIServingCompletion(OpenAIServing):
             f"{self._base_request_id(raw_request, request.request_id)}")
         created_time = int(time.time())
         convid = raw_request.headers.get("X-Flow-Conversation-Id","null")
+        if convid=="null":
+            logger.error("not found X-Flow-Conversation-Id")
         request_id = f"{request_id}#{convid}"
 
         request_metadata = RequestResponseMetadata(request_id=request_id)
