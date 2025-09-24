@@ -14,6 +14,65 @@ from vllm.v1.request import Request, RequestStatus
 
 logger = init_logger(__name__)
 
+from datetime import datetime
+
+@dataclass
+class KVCacheStats:
+    """
+    A class to track KVCache statistics including total requests and cache hits.
+    """
+    total_requests: int = 0
+    cached_blocks: int = 0
+    total_blocks: int = 0
+    request_ids: set[str] = set()
+    convid2time:dict[str,datetime] = {}
+
+    def update_stats(self, req_id:str, total_blocks: int, hit_cached_blocks: int = 0):
+        if req_id in self.request_ids:
+            raise ValueError(f"Request {req_id} already exists in stats.")
+        self.request_ids.add(req_id)
+
+        convid = req_id.split('#')[1]
+        if convid != "null":
+            if convid not in self.convid2time:
+                self.convid2time[convid] = datetime.now()
+                logger.info(f"first convid {convid} at {self.convid2time[convid]} and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks}")
+            else:
+                last_seen = self.convid2time[convid]
+                cur = datetime.now()
+                interval = (cur - last_seen).total_seconds()
+                self.convid2time[convid] = cur
+                logger.info(f"after {interval} seconds {convid} seen and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks}")
+        else:
+            logger.warning(f"request {req_id} has null convid")
+
+        self.total_requests += 1
+        self.cached_blocks += hit_cached_blocks
+        self.total_blocks += total_blocks
+
+        # Print statistics when total requests reach 100
+        if self.total_requests >= 100:
+            self.print_stats()
+            self.reset()
+
+    def print_stats(self):
+        """
+        Print the current statistics.
+        """
+        logger.info("KVCache Statistics:")
+        logger.info(f"  Total Requests: {self.total_requests}")
+        logger.info(f"  Hit Blocks: {self.cached_blocks}")
+        logger.info(f"  Total Blocks: {self.total_blocks}")
+        logger.info(f"  Average hit block ratio: {self.cached_blocks / self.total_blocks:.2f}")
+
+    def reset(self):
+        """
+        Reset the statistics.
+        """
+        self.total_requests = 0
+        self.cached_blocks = 0
+        self.total_blocks = 0
+
 
 @dataclass
 class KVCacheBlocks:
@@ -100,6 +159,8 @@ class KVCacheManager:
         self.log_stats = log_stats
         # FIXME: make prefix cache stats conditional on log_stats
         self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
+        # Initialize KVCache statistics
+        self.kv_cache_stats = KVCacheStats()
 
         self.block_size: Optional[int] = None
         if self.enable_caching:
@@ -186,6 +247,11 @@ class KVCacheManager:
             self.prefix_cache_stats.requests += 1
             self.prefix_cache_stats.queries += request.num_tokens
             self.prefix_cache_stats.hits += num_new_computed_tokens
+
+        # Update KVCache statistics
+        # Count cached blocks (sum across all kv cache groups)
+        num_cached_blocks = sum(len(group) for group in computed_blocks)
+        self.kv_cache_stats.update_stats(request.request_id,len(request.block_hashes), num_cached_blocks)
 
         return KVCacheBlocks(computed_blocks), num_new_computed_tokens
 
@@ -396,3 +462,18 @@ class KVCacheManager:
         """Creates a new KVCacheBlocks instance with no blocks."""
         return KVCacheBlocks(tuple([]
                                    for _ in range(self.num_kv_cache_groups)))
+
+    def get_kv_cache_stats(self) -> KVCacheStats:
+        """
+        Get the current KVCache statistics.
+    
+        Returns:
+            KVCacheStats: The current statistics
+        """
+        return self.kv_cache_stats
+
+    def reset_kv_cache_stats(self) -> None:
+        """
+        Reset the KVCache statistics.
+        """
+        self.kv_cache_stats.reset()

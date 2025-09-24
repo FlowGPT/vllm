@@ -71,6 +71,7 @@ class BlockPool:
 
         self.enable_kv_cache_events = enable_kv_cache_events
         self.kv_event_queue: list[KVCacheEvent] = []
+        self.seen_first_not_null_block = False
 
     def get_cached_block(
             self, block_hash: BlockHash,
@@ -187,6 +188,9 @@ class BlockPool:
         # In order to only iterate the list once, we duplicated code a bit
         if self.enable_caching:
             for block in ret:
+                if not self.seen_first_not_null_block and block.block_hash is not None:
+                    self.seen_first_not_null_block = True
+                    logger.info(f"get first non-null block: {block.block_hash}")
                 self._maybe_evict_cached_block(block)
                 assert block.ref_cnt == 0
                 block.ref_cnt += 1
