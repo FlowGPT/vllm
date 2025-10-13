@@ -246,15 +246,17 @@ class KVCacheManager:
             self.coordinator.find_longest_cache_hit(request.block_hashes,
                                                     max_cache_hit_length))
 
+        num_cached_blocks = sum(len(group) for group in computed_blocks)
         if self.log_stats:
             assert self.prefix_cache_stats is not None
             self.prefix_cache_stats.requests += 1
             self.prefix_cache_stats.queries += request.num_tokens
             self.prefix_cache_stats.hits += num_new_computed_tokens
+            self.prefix_cache_stats.hit_blocks += num_cached_blocks
+            self.prefix_cache_stats.missing_blocks += len(request.block_hashes) - num_cached_blocks
 
         # Update KVCache statistics
         # Count cached blocks (sum across all kv cache groups)
-        num_cached_blocks = sum(len(group) for group in computed_blocks)
         self.kv_cache_stats.update_stats(request.request_id,len(request.block_hashes), num_cached_blocks)
 
         return KVCacheBlocks(computed_blocks), num_new_computed_tokens

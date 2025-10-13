@@ -3864,6 +3864,7 @@ def get_layers_from_vllm_config(
             vllm_config.compilation_config.static_forward_context.keys())
 
     forward_context = vllm_config.compilation_config.static_forward_context
+    logger.info("layers names: %s", layer_names)
 
     return {
         layer_name: forward_context[layer_name]

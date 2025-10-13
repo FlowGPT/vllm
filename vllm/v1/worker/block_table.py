@@ -97,6 +97,10 @@ class BlockTable:
         # NOTE(woosuk): We can't simply use `token_indices // block_size`
         # here because M (max_model_len) is not necessarily divisible by
         # block_size.
+
+        logger.info("compute_slot_mapping called with req_indices: %s, positions: %s", 
+                    req_indices, positions)
+            
         if self.dcp_world_size > 1:
             # Note(hc): The DCP implement store kvcache with an interleave
             # style, the kvcache for the token whose token_idx is i is
@@ -119,6 +123,7 @@ class BlockTable:
             # Write final slots, use -1 for not-local
             self.slot_mapping_np[:req_indices.shape[0]] = np.where(
                 mask, slot_mapping, -1)
+                
         else:
             block_table_indices = (req_indices * self.max_num_blocks_per_req +
                                    positions // self.block_size)
@@ -127,6 +132,12 @@ class BlockTable:
             np.add(block_numbers * self.block_size,
                    block_offsets,
                    out=self.slot_mapping_np[:req_indices.shape[0]])
+                   
+            logger.info("Non-DCP path - block_table_indices: %s", block_table_indices)
+            logger.info("Non-DCP path - block_numbers: %s", block_numbers)
+            logger.info("Non-DCP path - block_offsets: %s", block_offsets)
+            logger.info("Non-DCP path - final slot_mapping_np[:%d]: %s", 
+                        req_indices.shape[0], self.slot_mapping_np[:req_indices.shape[0]])
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table[:num_reqs].copy_(self.block_table_cpu[:num_reqs],

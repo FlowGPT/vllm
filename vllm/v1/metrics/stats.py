@@ -24,6 +24,8 @@ class PrefixCacheStats:
     queries: int = 0
     # The number of hits in these requests.
     hits: int = 0
+    hit_blocks: int = 0
+    missing_blocks: int = 0
 
 
 @dataclass
