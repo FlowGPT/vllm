@@ -24,7 +24,9 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.utils import is_spec_decode_unsupported
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
+from vllm.logger import init_logger
 
+logger = init_logger(__name__)
 
 @dataclass
 class CachedRequestState:
@@ -327,9 +329,14 @@ class InputBatch:
         self.block_table.add_row(request.block_ids, req_index)
 
         if sampling_params := request.sampling_params:
+            sampling_params.frequency_penalty = 0.0
+            sampling_params.presence_penalty = 0.0
+            sampling_params.min_p = 0.0
             if (self.is_spec_decode
                     and is_spec_decode_unsupported(sampling_params)):
                 self.spec_decode_unsupported_reqs.add(req_id)
+                logger.warning(
+                    f"Spec decode is not supported for request {req_id}")
             if sampling_params.sampling_type == SamplingType.GREEDY:
                 # Avoid later division by zero.
                 self.temperature_cpu[req_index] = -1.0
