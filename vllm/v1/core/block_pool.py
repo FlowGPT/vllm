@@ -253,7 +253,7 @@ class BlockPool:
                     self.free_block_queue.remove(block)
                 block.ref_cnt += 1
 
-    def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
+    def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock], pos= "tail") -> None:
         """Free a list of blocks. The blocks should be ordered by their
         eviction priority, where the first block will be evicted first.
 
@@ -265,10 +265,16 @@ class BlockPool:
         blocks_list = list(ordered_blocks)
         for block in blocks_list:
             block.ref_cnt -= 1
-        self.free_block_queue.append_n([
-            block for block in blocks_list
-            if block.ref_cnt == 0 and not block.is_null
-        ])
+        if pos == "tail":
+            self.free_block_queue.append_n([
+                block for block in blocks_list
+                if block.ref_cnt == 0 and not block.is_null
+            ])
+        elif pos == "head":
+            self.free_block_queue.prepend_n([
+                block for block in blocks_list
+                if block.ref_cnt == 0 and not block.is_null
+            ])
 
     def reset_prefix_cache(self) -> bool:
         """Reset prefix cache. This function may be used in RLHF
