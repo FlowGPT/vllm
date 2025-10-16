@@ -36,8 +36,8 @@ class KVCacheStats:
             return
         self.request_ids.add(req_id)
 
-        convid = req_id.split('#')[1]
-        if convid != "null-0":
+        convid = req_id.split('#')[1].rsplit('-',1)[0].split('_')[0]
+        if convid != "null":
             if convid not in self.convid2time:
                 self.convid2time[convid] = datetime.now()
                 logger.info(f"first convid {convid} at {self.convid2time[convid]} and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks:.3f}")
