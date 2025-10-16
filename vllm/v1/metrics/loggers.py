@@ -126,8 +126,8 @@ class LoggingStatLogger(StatLoggerBase):
             "Avg generation throughput: %.1f tokens/s, "
             "Running: %d reqs, Waiting: %d reqs, "
             "GPU KV cache usage: %.1f%%, "
-            "Prefix cache hit rate: %.1f%%",
-            "prefix cache block hit rate: %.1f%%",
+            "Prefix cache hit rate: %.1f%% "
+            "prefix cache block hit rate: %.1f%% "
             "prefix cache hit blocks num: %d, ",
             self.engine_index,
             prompt_throughput,

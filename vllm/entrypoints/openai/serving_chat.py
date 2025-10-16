@@ -259,6 +259,8 @@ class OpenAIServingChat(OpenAIServing):
             logger.warnning("not found X-Flow-Conversation-Id")
         if crop == "1":
             request_id = f"{request_id}#{convid}_crop"
+        else:
+            request_id = f"{request_id}#{convid}"
 
         request_metadata = RequestResponseMetadata(request_id=request_id)
         if raw_request:
