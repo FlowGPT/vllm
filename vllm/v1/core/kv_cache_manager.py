@@ -15,6 +15,7 @@ from vllm.v1.request import Request, RequestStatus
 logger = init_logger(__name__)
 
 from datetime import datetime
+import os
 
 @dataclass
 class KVCacheStats:
@@ -164,7 +165,7 @@ class KVCacheManager:
         # FIXME: make prefix cache stats conditional on log_stats
         self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
         # Initialize KVCache statistics
-        self.kv_cache_stats = KVCacheStats()
+        self.kv_cache_stats = KVCacheStats() if os.getenv("ENABLE_KV_CACHE_STATS", "0") == "1" else None
 
         self.block_size: Optional[int] = None
         if self.enable_caching:
@@ -257,7 +258,8 @@ class KVCacheManager:
 
         # Update KVCache statistics
         # Count cached blocks (sum across all kv cache groups)
-        self.kv_cache_stats.update_stats(request.request_id,len(request.block_hashes), num_cached_blocks)
+        if self.kv_cache_stats is not None:
+            self.kv_cache_stats.update_stats(request.request_id,len(request.block_hashes), num_cached_blocks)
 
         return KVCacheBlocks(computed_blocks), num_new_computed_tokens
 
