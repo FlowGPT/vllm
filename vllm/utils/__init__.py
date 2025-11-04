@@ -1173,7 +1173,7 @@ def make_ndarray_with_pad(
     Make a padded array from 2D inputs.
 
     The padding is applied to the end of each inner list until it reaches
-    `max_len`.
+    `max_len`. If an inner list is longer than `max_len`, it is truncated.
     """
     if max_len is None:
         # Unlike for most functions, map is faster than a genexpr over `len`
@@ -1181,8 +1181,10 @@ def make_ndarray_with_pad(
 
     padded_x = np.full((len(x), max_len), pad, dtype=dtype)
     for ind, blocktb in enumerate(x):
-        assert len(blocktb) <= max_len
-        padded_x[ind, :len(blocktb)] = blocktb
+        #assert len(blocktb) <= max_len
+        #padded_x[ind, :len(blocktb)] = blocktb
+        length = min(len(blocktb), max_len)
+        padded_x[ind, :length] = blocktb[:length]
 
     return padded_x
 

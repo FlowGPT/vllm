@@ -135,9 +135,11 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
         sampled_token_ids: torch.Tensor,
         invalid_req_indices: list[int],
         async_output_copy_stream: torch.cuda.Stream,
+        requests: dict[int,CachedRequestState],
     ):
         self._model_runner_output = model_runner_output
         self._invalid_req_indices = invalid_req_indices
+        self._requests = requests
 
         # Event on the copy stream so we can synchronize the non-blocking copy.
         self._async_copy_ready_event = torch.cuda.Event()
@@ -167,6 +169,18 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
         valid_sampled_token_ids = self._sampled_token_ids_cpu.tolist()
         for i in self._invalid_req_indices:
             valid_sampled_token_ids[i].clear()
+
+        #print(valid_sampled_token_ids)
+        #print(len(valid_sampled_token_ids))
+
+        for idx, valid_sampled_token_id in enumerate(valid_sampled_token_ids):
+            if valid_sampled_token_id:
+                try:
+                    self._requests[idx].output_token_ids.extend(valid_sampled_token_id)
+                except Exception as e:
+                    print(f"Error adding output tokens for request {idx}, results keys {list(self._requests.keys())}")
+                    raise e
+                #print("add output tokens", self._requests[idx].output_token_ids)
 
         output = self._model_runner_output
         output.sampled_token_ids = valid_sampled_token_ids
@@ -2103,6 +2117,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             list[str],
             dict[str, int],
             list[int],
+            dict[int,CachedRequestState]
     ]:
         num_nans_in_logits = {}
         if envs.VLLM_COMPUTE_NANS_IN_LOGITS:
@@ -2176,6 +2191,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # the sampled tokens back, because there's no direct communication
         # between the first-stage worker and the last-stage worker.
         req_ids = self.input_batch.req_ids
+        temp_cached_requests = {}
         for req_idx in range(num_sampled_tokens):
             if self.use_async_scheduling:
                 sampled_ids = [-1] if \
@@ -2200,7 +2216,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
 
             req_id = req_ids[req_idx]
             req_state = self.requests[req_id]
-            req_state.output_token_ids.extend(sampled_ids)
+            # req_state.output_token_ids.extend(sampled_ids)
+            temp_cached_requests[req_idx] = req_state
 
         return (
             num_nans_in_logits,
@@ -2210,6 +2227,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             req_ids_output_copy,
             req_id_to_index_output_copy,
             invalid_req_indices,
+            temp_cached_requests,
         )
 
     @contextmanager
@@ -2410,6 +2428,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 req_ids_output_copy,
                 req_id_to_index_output_copy,
                 invalid_req_indices,
+                temp_cached_requests,
             ) = self._bookkeeping_sync(scheduler_output, sampler_output,
                                        logits, hidden_states,
                                        num_scheduled_tokens)
@@ -2442,6 +2461,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             sampled_token_ids=sampler_output.sampled_token_ids,
             invalid_req_indices=invalid_req_indices,
             async_output_copy_stream=self.async_output_copy_stream,
+            requests=temp_cached_requests,
         )
 
     def take_draft_token_ids(self) -> Optional[DraftTokenIds]:
