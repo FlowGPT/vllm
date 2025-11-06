@@ -12,6 +12,8 @@ from vllm.v1.kv_cache_interface import (ChunkedLocalAttentionSpec,
                                         KVCacheSpec, MambaSpec,
                                         MLAAttentionSpec, SlidingWindowSpec)
 from vllm.v1.request import Request
+from vllm.logger import init_logger
+logger = init_logger(__name__)
 
 
 class SingleTypeKVCacheManager(ABC):
@@ -166,8 +168,11 @@ class SingleTypeKVCacheManager(ABC):
         # Free blocks in reverse order so that the tail blocks are
         # freed first.
         ordered_blocks = reversed(req_blocks)
-
-        self.block_pool.free_blocks(ordered_blocks)
+        if "crop" in request_id:
+            logger.info(f"free {request_id} with head pos")
+            self.block_pool.free_blocks(ordered_blocks,pos="head")
+        else:
+            self.block_pool.free_blocks(ordered_blocks)
         self.num_cached_block.pop(request_id, None)
 
     @abstractmethod

@@ -109,8 +109,10 @@ class PrefixCachingMetrics:
         self.aggregated_requests = 0
         self.aggregated_query_total = 0
         self.aggregated_query_hit = 0
+        self.aggregated_hit_blocks = 0
+        self.aggregated_missing_blocks = 0
         # A deque of (requests, queries, hits) for the most recent requests.
-        self.query_queue: deque[tuple[int, int, int]] = deque()
+        self.query_queue: deque[tuple[int, int, int, int, int]] = deque()
 
     def observe(self, stats: PrefixCacheStats):
         """Observe the prefix caching for a set of requests.
@@ -135,28 +137,30 @@ class PrefixCachingMetrics:
             return
 
         # Update the metrics.
-        self.query_queue.append((stats.requests, stats.queries, stats.hits))
+        self.query_queue.append((stats.requests, stats.queries, stats.hits, stats.hit_blocks, stats.missing_blocks))
         self.aggregated_requests += stats.requests
         self.aggregated_query_total += stats.queries
         self.aggregated_query_hit += stats.hits
+        self.aggregated_hit_blocks += stats.hit_blocks
+        self.aggregated_missing_blocks += stats.missing_blocks
 
-        # Remove the oldest stats until number of requests does not exceed
-        # the limit.
-        # NOTE: We preserve the latest added stats regardless.
-        while len(
-                self.query_queue
-        ) > 1 and self.aggregated_requests > self.max_recent_requests:
-            old_requests, old_queries, old_hits = self.query_queue.popleft()
+        # Remove the oldest stats if the number of requests exceeds.
+        if self.aggregated_requests > self.max_recent_requests:
+            old_requests, old_queries, old_hits, old_hit_blocks, old_missing_blocks = self.query_queue.popleft()
             self.aggregated_requests -= old_requests
             self.aggregated_query_total -= old_queries
             self.aggregated_query_hit -= old_hits
-
+            self.aggregated_hit_blocks -= old_hit_blocks
+            self.aggregated_missing_blocks -= old_missing_blocks
     def reset(self):
         """Reset the metrics."""
         self.aggregated_requests = 0
         self.aggregated_query_total = 0
         self.aggregated_query_hit = 0
+        self.aggregated_hit_blocks = 0
+        self.aggregated_missing_blocks = 0
         self.query_queue.clear()
+
 
     @property
     def hit_rate(self) -> float:
@@ -165,6 +169,13 @@ class PrefixCachingMetrics:
             return 0.0
         return self.aggregated_query_hit / self.aggregated_query_total
 
+    @property
+    def hit_block_rate(self) -> float:
+        """Calculate the hit rate for the past N requests."""
+        total_blocks = self.aggregated_hit_blocks + self.aggregated_missing_blocks
+        if total_blocks == 0:
+            return 0.0
+        return self.aggregated_hit_blocks / total_blocks
 
 @dataclass
 class KVCacheBlock:
@@ -396,6 +407,35 @@ class FreeKVCacheBlockQueue:
         self.fake_free_list_tail.prev_free_block = last_block
 
         self.num_free_blocks += len(blocks)
+
+    def prepend_n(self, blocks: list[KVCacheBlock]) -> None:
+        """Put a list of blocks at the front of the free list.
+
+        After this call, `blocks[0]` will become the new first free block
+        (right after `fake_free_list_head`). The order of `blocks` will be
+        preserved.
+
+        Args:
+            blocks: The list of blocks to prepend.
+        """
+        if not blocks:
+            return
+        self.num_free_blocks += len(blocks)
+
+        original_first_block = self.fake_free_list_head.next_free_block
+        assert original_first_block is not None, (
+            "next_free_block of fake_free_list_head should always exist")
+
+        # Link the new blocks together
+        current_block = self.fake_free_list_head
+        for block in blocks:
+            current_block.next_free_block = block
+            block.prev_free_block = current_block
+            current_block = block
+
+        # Connect the end of the new block chain to the head of the original list
+        current_block.next_free_block = original_first_block
+        original_first_block.prev_free_block = current_block
 
     def get_all_free_blocks(self) -> list[KVCacheBlock]:
         """Get all free blocks in the free list. Mainly used for testing.
@@ -1084,7 +1124,7 @@ def get_kv_cache_config_from_groups(vllm_config: VllmConfig,
             "Multiplying the GPU KV cache size by the dcp_world_size %d.",
             vllm_config.parallel_config.decode_context_parallel_size)
     num_tokens_str = f"{num_tokens:,}"
-    logger.info("GPU KV cache size: %s tokens", num_tokens_str)
+    logger.info("GPU KV cache size: %s tokens, num_blocks %d", num_tokens_str, num_blocks)
     max_model_len_str = f"{vllm_config.model_config.max_model_len:,}"
     max_concurrency = get_max_concurrency_for_kv_cache_config(
         vllm_config, kv_cache_config)

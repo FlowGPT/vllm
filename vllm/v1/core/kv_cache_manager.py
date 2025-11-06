@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional, overload
 
 from vllm.distributed.kv_events import KVCacheEvent
@@ -11,9 +11,71 @@ from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
+from datetime import datetime
+import os
 
 logger = init_logger(__name__)
 
+
+class KVCacheStats:
+    """
+    A class to track KVCache statistics including total requests and cache hits.
+    """
+    total_requests: int = 0
+    cached_blocks: int = 0
+    total_blocks: int = 0
+    request_ids: set[str] = field(default_factory=set)
+    convid2time:dict[str,datetime] = field(default_factory=dict)
+
+    def update_stats(self, req_id:str, total_blocks: int, hit_cached_blocks: int = 0):
+        if total_blocks == 0:
+            return
+
+        if req_id in self.request_ids:
+            logger.warning(f"Request {req_id} already exists in stats.")
+            return
+        self.request_ids.add(req_id)
+
+        convid = req_id.split('#')[1].rsplit('-',1)[0].split('_')[0]
+        if convid != "null":
+            if convid not in self.convid2time:
+                self.convid2time[convid] = datetime.now()
+                logger.info(f"first convid {convid} at {self.convid2time[convid]} and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks:.3f}")
+            else:
+                last_seen = self.convid2time[convid]
+                cur = datetime.now()
+                interval = (cur - last_seen).total_seconds()
+                self.convid2time[convid] = cur
+                logger.info(f"after {interval} seconds {convid} seen and req_id {req_id} hit {hit_cached_blocks}/{total_blocks} and ratio {hit_cached_blocks/total_blocks:.3f}")
+        else:
+            logger.warning(f"request {req_id} has null convid")
+
+        self.total_requests += 1
+        self.cached_blocks += hit_cached_blocks
+        self.total_blocks += total_blocks
+
+        # Print statistics when total requests reach 100
+        if self.total_requests >= 100:
+            self.print_stats()
+            self.reset()
+
+    def print_stats(self):
+        """
+        Print the current statistics.
+        """
+        logger.info("KVCache Statistics:")
+        logger.info(f"  Total Requests: {self.total_requests}")
+        logger.info(f"  Hit Blocks: {self.cached_blocks}")
+        logger.info(f"  Total Blocks: {self.total_blocks}")
+        logger.info(f"  Average hit block ratio: {self.cached_blocks / self.total_blocks:.3f}")
+
+    def reset(self):
+        """
+        Reset the statistics.
+        """
+        self.total_requests = 0
+        self.cached_blocks = 0
+        self.total_blocks = 0
 
 @dataclass
 class KVCacheBlocks:
@@ -101,6 +163,8 @@ class KVCacheManager:
         self.log_stats = log_stats
         # FIXME: make prefix cache stats conditional on log_stats
         self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
+        # Initialize KVCache statistics
+        self.kv_cache_stats = KVCacheStats() if os.getenv("ENABLE_KV_CACHE_STATS", "0") == "1" else None
 
         self.block_size: Optional[int] = None
         if self.enable_caching:
@@ -182,11 +246,19 @@ class KVCacheManager:
             self.coordinator.find_longest_cache_hit(request.block_hashes,
                                                     max_cache_hit_length))
 
+        num_cached_blocks = sum(len(group) for group in computed_blocks)
         if self.log_stats:
             assert self.prefix_cache_stats is not None
             self.prefix_cache_stats.requests += 1
             self.prefix_cache_stats.queries += request.num_tokens
             self.prefix_cache_stats.hits += num_new_computed_tokens
+            self.prefix_cache_stats.hit_blocks += num_cached_blocks
+            self.prefix_cache_stats.missing_blocks += len(request.block_hashes) - num_cached_blocks
+
+        # Update KVCache statistics
+        # Count cached blocks (sum across all kv cache groups)
+        if self.kv_cache_stats is not None:
+            self.kv_cache_stats.update_stats(request.request_id,len(request.block_hashes), num_cached_blocks)
 
         return KVCacheBlocks(computed_blocks), num_new_computed_tokens
 

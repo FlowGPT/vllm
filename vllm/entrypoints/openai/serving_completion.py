@@ -121,6 +121,15 @@ class OpenAIServingCompletion(OpenAIServing):
             f"cmpl-"
             f"{self._base_request_id(raw_request, request.request_id)}")
         created_time = int(time.time())
+        convid = raw_request.headers.get("X-Flow-Conversation-Id","null")
+        crop = raw_request.headers.get("X-Flow-Is-Crop","0")
+        if convid=="null":
+            logger.error("not found X-Flow-Conversation-Id")
+        if crop == "1":
+            request_id = f"{request_id}#{convid}_crop"
+        else:
+            request_id = f"{request_id}#{convid}"
+
 
         request_metadata = RequestResponseMetadata(request_id=request_id)
         if raw_request:
