@@ -16,7 +16,7 @@ import os
 
 logger = init_logger(__name__)
 
-
+@dataclass
 class KVCacheStats:
     """
     A class to track KVCache statistics including total requests and cache hits.
