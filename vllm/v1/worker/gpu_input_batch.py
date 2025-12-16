@@ -25,7 +25,8 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.utils import is_spec_decode_unsupported
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
-
+from vllm.logger import init_logger
+logger = init_logger(__name__)
 
 @dataclass
 class CachedRequestState:
@@ -265,6 +266,7 @@ class InputBatch:
         # (e.g. penalties).
         self.sampled_token_ids_cpu: torch.Tensor | None = None
         self.async_copy_ready_event: torch.Event | None = None
+        self.checkreq_ids = []
 
     @property
     def req_ids(self) -> list[str]:
@@ -298,6 +300,22 @@ class InputBatch:
 
         return new_req_index
 
+    def debug_tensor(self, tensor_layner_0:torch.Tensor) -> None:
+        if len(self.checkreq_ids) == 0:
+            return
+        req_id = self.checkreq_ids.pop()
+        debug_info = req_id.split("-")[1]
+        logger.info(f"debug gpu {debug_info}")
+        logic_blockpos, token_pos = debug_info.split("#")
+        logic_blockpos = int(logic_blockpos)
+        token_pos = int(token_pos)
+        rowindex = self.req_id_to_index[req_id]
+        temp=self.block_table.block_tables[0].block_table.np
+        blockid = temp[rowindex][logic_blockpos].item()
+        logger.info(f"debug gpu {blockid} block")
+        debug_tensor = tensor_layner_0[0,blockid,token_pos,0,:]
+        logger.info(debug_tensor)
+
     def add_request(
         self,
         request: "CachedRequestState",
@@ -315,6 +333,9 @@ class InputBatch:
             self.spec_token_ids[req_index].clear()
 
         self.req_id_to_index[req_id] = req_index
+        if "debug" in req_id:
+            self.checkreq_ids.append(req_id)
+        logger.info(f"Adding request {req_id} to index {req_index}")
 
         # Copy the prompt token ids and output token ids.
         num_prompt_tokens = length_from_prompt_token_ids_or_embeds(
@@ -339,6 +360,10 @@ class InputBatch:
         self.num_tokens_no_spec[req_index] = request.num_tokens
 
         self.num_computed_tokens_cpu[req_index] = request.num_computed_tokens
+        logger.info(
+            f"Request {req_id} has {self.num_computed_tokens_cpu[req_index]} "
+            f"computed tokens."
+        )
         self.block_table.add_row(request.block_ids, req_index)
 
         if sampling_params := request.sampling_params:

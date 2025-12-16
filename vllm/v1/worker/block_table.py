@@ -67,6 +67,10 @@ class BlockTable:
         self.block_table = self._make_buffer(
             self.max_num_reqs, self.max_num_blocks_per_req, dtype=torch.int32
         )
+        logger.info(
+            f"Allocating {self.max_num_reqs} rows of {self.max_num_blocks_per_req} "
+            f"blocks each, with block size {self.block_size}."
+        )
         self.num_blocks_per_row = np.zeros(max_num_reqs, dtype=np.int32)
 
         self.slot_mapping = self._make_buffer(
@@ -113,6 +117,10 @@ class BlockTable:
         start = self.num_blocks_per_row[row_idx]
         self.num_blocks_per_row[row_idx] += num_blocks
         self.block_table.np[row_idx, start : start + num_blocks] = block_ids
+        logger.debug(
+            f"After append num {num_blocks} blocks at start {start}, row {row_idx} has blocks: "
+            f"{self.block_table.np[row_idx, : self.num_blocks_per_row[row_idx]]}"
+        )
 
     def add_row(self, block_ids: list[int], row_idx: int) -> None:
         self.num_blocks_per_row[row_idx] = 0
@@ -188,6 +196,7 @@ class BlockTable:
                 block_offsets,
                 out=self.slot_mapping.np[: req_indices.shape[0]],
             )
+        logger.debug("current req_indices %s, positions %s, slot_mapping: %s", req_indices, positions, self.slot_mapping.np[: req_indices.shape[0]])
 
     def commit_block_table(self, num_reqs: int) -> None:
         self.block_table.copy_to_gpu(num_reqs)

@@ -17,6 +17,8 @@ from vllm.v1.attention.backends.utils import AttentionMetadataBuilder
 from vllm.v1.core.encoder_cache_manager import compute_mm_encoder_budget
 from vllm.v1.kv_cache_interface import KVCacheGroupSpec, KVCacheSpec
 
+from vllm.logger import init_logger
+logger = init_logger(__name__)
 
 class MultiModalBudget:
     """Helper class to calculate budget information for multi-modal models."""
@@ -327,6 +329,7 @@ def bind_kv_cache(
     for layer_name, kv_cache in kv_caches.items():
         # NOTE: Use list because of v0 PP virtual engine.
         forward_context[layer_name].kv_cache = [kv_cache]
+        logger.info(f"shape of kv_cache for {layer_name}: {kv_cache.shape}")
 
 
 def is_residual_scattered_for_sp(

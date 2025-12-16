@@ -3000,6 +3000,7 @@ class GPUModelRunner(
                 **model_kwargs,
             )
 
+        self.input_batch.debug_tensor(self.kv_caches[10])
         with record_function_or_nullcontext("gpu_model_runner: postprocess"):
             if self.use_aux_hidden_state_outputs:
                 # True when EAGLE 3 is used.
@@ -5173,6 +5174,7 @@ class GPUModelRunner(
             )
             self.cross_layers_kv_cache = cross_layers_kv_cache
             self.cross_layers_attn_backend = attn_backend
+            logger.info(f"using uniform KV cache, dtype: {cache_dtype}")
         else:
             # Fallback to the general case
             # Initialize the memory buffer for KV cache
@@ -5182,6 +5184,7 @@ class GPUModelRunner(
             kv_caches = self._reshape_kv_cache_tensors(
                 kv_cache_config, kv_cache_raw_tensors, kernel_block_sizes
             )
+            logger.info(f"not using uniform KV cache, dtype: {cache_dtype}")
 
         # Set up cross-layer KV cache sharing
         for layer_name, target_layer_name in self.shared_kv_cache_layers.items():
@@ -5245,6 +5248,7 @@ class GPUModelRunner(
         # kernel_block_size 64 and split the 256-token-block to 4 blocks with 64
         # tokens each.
         kernel_block_sizes = self._prepare_kernel_block_sizes(kv_cache_config)
+        logger.info("kernel_block_sizes: %s", kernel_block_sizes)
 
         # create metadata builders
         self.initialize_metadata_builders(kv_cache_config, kernel_block_sizes)
