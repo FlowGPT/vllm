@@ -305,7 +305,7 @@ class InputBatch:
             return
         req_id = self.checkreq_ids.pop()
         debug_info = req_id.split("-")[1]
-        logger.info(f"debug gpu {debug_info}")
+        logger.info(f"debug gpu {debug_info} from {req_id}")
         logic_blockpos, token_pos = debug_info.split("#")
         logic_blockpos = int(logic_blockpos)
         token_pos = int(token_pos)
@@ -315,6 +315,10 @@ class InputBatch:
         logger.info(f"debug gpu {blockid} block")
         debug_tensor = tensor_layner_0[0,blockid,token_pos,0,:]
         logger.info(debug_tensor)
+        # import torch
+        # debug_tensor = tensor_layner_0[0,blockid,token_pos,:]
+        # save_path = f"debug_tensor_{req_id}.pt"
+        # torch.save(debug_tensor, save_path)
 
     def add_request(
         self,
