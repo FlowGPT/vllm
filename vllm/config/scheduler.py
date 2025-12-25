@@ -60,6 +60,9 @@ class SchedulerConfig:
     The default value here is mainly for convenience when testing.
     In real usage, this should be set in `EngineArgs.create_engine_config`.
     """
+    max_waiting_queue_length: int | None = Field(default=None, ge=1)
+    """The maximum number of requests allowed in the waiting queue.
+    If None, there is no limit on the waiting queue length."""
 
     max_num_partial_prefills: int = Field(default=1, ge=1)
     """For chunked prefill, the maximum number of sequences that can be

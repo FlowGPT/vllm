@@ -123,9 +123,15 @@ from vllm.v1.engine import EngineCoreRequest
 class GenerationError(Exception):
     """raised when finish_reason indicates internal server error (500)"""
 
-    def __init__(self, message: str = "Internal server error"):
+    def __init__(
+            self,
+            message: str = "Internal server error",
+            err_type: str = "InternalServerError",
+            status_code: HTTPStatus = HTTPStatus.INTERNAL_SERVER_ERROR,
+        ):
         super().__init__(message)
-        self.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+        self.err_type = err_type
+        self.status_code = status_code
 
 
 logger = init_logger(__name__)
@@ -777,6 +783,15 @@ class OpenAIServing:
                 request_id,
             )
             raise GenerationError("Internal server error")
+        if finish_reason == "rejected":
+            logger.error(
+                "Request %s was rejected due to waiting queue is full", request_id
+            )
+            raise GenerationError(
+                "Request was rejected for waiting queue is full",
+                err_type="ServiceUnavailableError",
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
 
     def _convert_generation_error_to_response(
         self, e: GenerationError
@@ -784,7 +799,7 @@ class OpenAIServing:
         """Convert GenerationError to ErrorResponse."""
         return self.create_error_response(
             str(e),
-            err_type="InternalServerError",
+            err_type=e.err_type,
             status_code=e.status_code,
         )
 
@@ -794,7 +809,7 @@ class OpenAIServing:
         """Convert GenerationError to streaming error response."""
         return self.create_streaming_error_response(
             str(e),
-            err_type="InternalServerError",
+            err_type=e.err_type,
             status_code=e.status_code,
         )
 
