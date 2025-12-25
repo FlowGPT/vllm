@@ -788,7 +788,7 @@ class OpenAIServing:
                 "Request %s was rejected due to waiting queue is full", request_id
             )
             raise GenerationError(
-                "Request was rejected",
+                "Request was rejected for waiting queue is full",
                 err_type="ServiceUnavailableError",
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE,
             )
