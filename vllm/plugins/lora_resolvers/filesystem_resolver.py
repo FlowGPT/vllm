@@ -33,10 +33,11 @@ class FilesystemResolver(LoRAResolver):
             if os.path.exists(adapter_config_path):
                 with open(adapter_config_path) as file:
                     adapter_config = json.load(file)
-                if (
-                    adapter_config["peft_type"] == "LORA"
-                    and adapter_config["base_model_name_or_path"] == base_model_name
-                ):
+                # Skip base_model_name_or_path check: adapter configs often
+                # record the training-host path, which won't match the serving
+                # host's --model value. Trust the operator to drop only
+                # compatible adapters into VLLM_LORA_RESOLVER_CACHE_DIR.
+                if adapter_config["peft_type"] == "LORA":
                     lora_request = LoRARequest(
                         lora_name=lora_name,
                         lora_int_id=abs(hash(lora_name)),

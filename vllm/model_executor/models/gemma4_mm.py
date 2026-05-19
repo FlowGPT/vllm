@@ -65,6 +65,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.utils.tensor_schema import TensorSchema, TensorShape
 
 from .interfaces import (
+    MixtureOfExperts,
     MultiModalEmbeddings,
     SupportsEagle3,
     SupportsLoRA,
@@ -918,6 +919,7 @@ class Gemma4ForConditionalGeneration(
     SupportsMultiModal,
     SupportsPP,
     SupportsLoRA,
+    MixtureOfExperts,
     SupportsEagle3,
 ):
     packed_modules_mapping = {
@@ -1377,6 +1379,10 @@ class Gemma4ForConditionalGeneration(
         hidden_states: torch.Tensor,
     ) -> torch.Tensor | None:
         return self.language_model.compute_logits(hidden_states)
+
+    def get_expert_mapping(self) -> list[tuple[str, str, int, str]]:
+        # Delegate to language_model (Gemma4ForCausalLM owns the MoE layers).
+        return self.language_model.get_expert_mapping()
 
     # ------------------------------------------------------------------ #
     # Bidirectional attention helpers
