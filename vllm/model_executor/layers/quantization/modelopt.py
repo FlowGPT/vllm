@@ -2373,6 +2373,14 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
         return None
 
     def apply_vllm_mapper(self, hf_to_vllm_mapper: "WeightsMapper"):
+        # Idempotent: apply_vllm_mapper is called twice on the same quant config
+        # object (once from VllmConfig.__post_init__ via _get_quantization_config,
+        # and once from initialize_model -> configure_quant_config). Without this
+        # guard the `.experts` -> `.moe.experts` regex would fire twice, producing
+        # `.moe.moe.experts` and failing the lookup again.
+        if getattr(self, "_vllm_mapper_applied", False):
+            return
+        self._vllm_mapper_applied = True
         super().apply_vllm_mapper(hf_to_vllm_mapper)
         if self.quantized_layers:
             self.quantized_layers = hf_to_vllm_mapper.apply_dict(self.quantized_layers)
