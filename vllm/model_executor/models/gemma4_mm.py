@@ -19,6 +19,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
 import numpy as np
+import regex as re
 import torch
 from PIL import Image as PILImage
 from torch import nn
@@ -935,6 +936,12 @@ class Gemma4ForConditionalGeneration(
 
     # Maps checkpoint prefixes to vLLM module paths.
     hf_to_vllm_mapper = WeightsMapper(
+        orig_to_new_regex={
+            # Rewrite the parent-module entry `.experts` -> `.moe.experts` so that
+            # ModelOptMixedPrecisionConfig.get_quant_method finds the FusedMoE
+            # quant entry via its vLLM-side prefix.
+            re.compile(r"\.experts$"): ".moe.experts",
+        },
         orig_to_new_prefix={
             "model.embed_audio.": "embed_audio.",
             "model.embed_vision.": "embed_vision.",
@@ -943,7 +950,7 @@ class Gemma4ForConditionalGeneration(
             "model.audio_tower.": "audio_tower.",
             "lm_head.": "language_model.lm_head.",
             "model": "language_model.model",
-        }
+        },
     )
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

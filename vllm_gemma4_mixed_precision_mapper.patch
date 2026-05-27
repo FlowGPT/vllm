@@ -1,0 +1,116 @@
+From: qian.wang <qian.wang@example.com>
+Subject: [PATCH] [Bugfix][Gemma4] Align ModelOpt MIXED_PRECISION quantized_layers
+ keys with runtime FusedMoE prefix
+
+When loading a Gemma4 checkpoint quantized via ModelOpt with mixed precision
+(e.g. NVFP4 experts + FP8 attention/dense MLP), the FusedMoE layers fall back
+to ``UnquantizedFusedMoEMethod`` because their quant entries cannot be found.
+
+Root cause 1 — prefix mismatch:
+
+ModelOpt checkpoints emit ``model.<...>.layers.N.experts`` to match the HF
+Transformers ``Gemma4DecoderLayer`` layout, while vLLM's ``Gemma4MoE`` wraps
+the experts and registers ``FusedMoE`` under ``...layers.N.moe.experts``.
+Per-tensor expert weight names are already remapped in ``_weight_iterator``
+via ``_remap_gemma4_expert_weight_name``, so weights load correctly. However,
+the ``hf_to_vllm_mapper`` previously had no rule for the parent-module entry,
+so ``ModelOptMixedPrecisionConfig.apply_vllm_mapper -> apply_dict`` never
+rewrote the ``quantized_layers`` keys. ``get_quant_method`` then queried
+``...layers.N.moe.experts`` and missed the ``...layers.N.experts`` entry,
+falling back to unquantized.
+
+Root cause 2 — double mapping:
+
+``apply_vllm_mapper`` is called twice on the same quant config object: once
+from ``VllmConfig.__post_init__`` (via ``_get_quantization_config``) and once
+from ``initialize_model`` -> ``configure_quant_config``. Without a guard, the
+``.experts`` -> ``.moe.experts`` regex fires twice, producing
+``.moe.moe.experts`` — which again fails lookup.
+
+Fix:
+
+1. Add a regex rule to both ``Gemma4ForCausalLM`` and
+   ``Gemma4ForConditionalGeneration`` weight mappers that rewrites the parent
+   ``.experts`` suffix.
+
+2. Make ``ModelOptMixedPrecisionConfig.apply_vllm_mapper`` idempotent with a
+   ``_vllm_mapper_applied`` guard flag.
+
+Effect:
+* Affects only the two Gemma4 wrapper classes — other models keep their
+  own mappers.
+* For non-mixed Gemma4 quantization paths (full NVFP4, full FP8, or BF16),
+  ``ModelOptMixedPrecisionConfig`` is not used, so both fixes are inert.
+* The idempotent guard is a general safety improvement — it prevents
+  double-mapping regardless of which model class triggers it.
+
+After this fix, vLLM logs ``Using 'VLLM_CUTLASS' NvFp4 MoE backend`` instead
+of ``Using TRITON Unquantized MoE backend`` for Gemma4 mixed-precision
+checkpoints.
+
+---
+diff --git a/vllm/model_executor/layers/quantization/modelopt.py b/vllm/model_executor/layers/quantization/modelopt.py
+index 092346cb3..289401d8f 100644
+--- a/vllm/model_executor/layers/quantization/modelopt.py
++++ b/vllm/model_executor/layers/quantization/modelopt.py
+@@ -2372,6 +2372,14 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
+         return None
+ 
+     def apply_vllm_mapper(self, hf_to_vllm_mapper: "WeightsMapper"):
++        # Idempotent: apply_vllm_mapper is called twice on the same quant config
++        # object (once from VllmConfig.__post_init__ via _get_quantization_config,
++        # and once from initialize_model -> configure_quant_config). Without this
++        # guard the `.experts` -> `.moe.experts` regex would fire twice, producing
++        # `.moe.moe.experts` and failing the lookup again.
++        if getattr(self, "_vllm_mapper_applied", False):
++            return
++        self._vllm_mapper_applied = True
+         super().apply_vllm_mapper(hf_to_vllm_mapper)
+         if self.quantized_layers:
+             self.quantized_layers = hf_to_vllm_mapper.apply_dict(self.quantized_layers)
+diff --git a/vllm/model_executor/models/gemma4.py b/vllm/model_executor/models/gemma4.py
+index 75f6945cc..4dd057f8f 100644
+--- a/vllm/model_executor/models/gemma4.py
++++ b/vllm/model_executor/models/gemma4.py
+@@ -1507,6 +1507,15 @@ class Gemma4ForCausalLM(
+     nn.Module, SupportsLoRA, SupportsPP, MixtureOfExperts, SupportsEagle3
+ ):
+     hf_to_vllm_mapper = WeightsMapper(
++        orig_to_new_regex={
++            # Rewrite the parent-module entry `.experts` -> `.moe.experts` so that
++            # ModelOptMixedPrecisionConfig.get_quant_method finds the FusedMoE
++            # quant entry via its vLLM-side prefix. Per-tensor expert weight names
++            # are already handled by `_remap_gemma4_expert_weight_name` inside
++            # `_weight_iterator`; this mapper is for the parent-module key in
++            # `quantized_layers` (rewritten via `apply_vllm_mapper`).
++            re.compile(r"\.experts$"): ".moe.experts",
++        },
+         orig_to_new_prefix={
+             # Gemma4ForConditionalGeneration already loads the text stack
+             # from `model.language_model.*`. We reuse that same checkpoint
+diff --git a/vllm/model_executor/models/gemma4_mm.py b/vllm/model_executor/models/gemma4_mm.py
+index 91be7d47f..8f2c0d604 100644
+--- a/vllm/model_executor/models/gemma4_mm.py
++++ b/vllm/model_executor/models/gemma4_mm.py
+@@ -934,6 +934,12 @@ class Gemma4ForConditionalGeneration(
+ 
+     # Maps checkpoint prefixes to vLLM module paths.
+     hf_to_vllm_mapper = WeightsMapper(
++        orig_to_new_regex={
++            # Rewrite the parent-module entry `.experts` -> `.moe.experts` so that
++            # ModelOptMixedPrecisionConfig.get_quant_method finds the FusedMoE
++            # quant entry via its vLLM-side prefix.
++            re.compile(r"\.experts$"): ".moe.experts",
++        },
+         orig_to_new_prefix={
+             "model.embed_audio.": "embed_audio.",
+             "model.embed_vision.": "embed_vision.",
+@@ -942,7 +948,7 @@ class Gemma4ForConditionalGeneration(
+             "model.audio_tower.": "audio_tower.",
+             "lm_head.": "language_model.lm_head.",
+             "model": "language_model.model",
+-        }
++        },
+     )
+ 
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

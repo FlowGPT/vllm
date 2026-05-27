@@ -1507,6 +1507,15 @@ class Gemma4ForCausalLM(
     nn.Module, SupportsLoRA, SupportsPP, MixtureOfExperts, SupportsEagle3
 ):
     hf_to_vllm_mapper = WeightsMapper(
+        orig_to_new_regex={
+            # Rewrite the parent-module entry `.experts` -> `.moe.experts` so that
+            # ModelOptMixedPrecisionConfig.get_quant_method finds the FusedMoE
+            # quant entry via its vLLM-side prefix. Per-tensor expert weight names
+            # are already handled by `_remap_gemma4_expert_weight_name` inside
+            # `_weight_iterator`; this mapper is for the parent-module key in
+            # `quantized_layers` (rewritten via `apply_vllm_mapper`).
+            re.compile(r"\.experts$"): ".moe.experts",
+        },
         orig_to_new_prefix={
             # Gemma4ForConditionalGeneration already loads the text stack
             # from `model.language_model.*`. We reuse that same checkpoint
