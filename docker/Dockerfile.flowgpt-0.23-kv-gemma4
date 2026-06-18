@@ -1,0 +1,46 @@
+# ssadds/vllm:flowgpt-0.23-kv-gemma4
+# Official v0.23.0 + fork patches (KV prefix cache, Gemma4 ModelOpt MoE) + FI 0.6.8.post1.
+#
+# Build: docker/flowgpt/build-0.23-kv-gemma4.sh
+
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.23.0
+FROM ${VLLM_BASE_IMAGE}
+
+ARG PY_SITE=/usr/local/lib/python3.12/dist-packages
+ARG FLASHINFER_VERSION=0.6.8.post1
+ARG FLASHINFER_CUDA=cu130
+ARG FLASHINFER_SOURCE=pip
+
+LABEL flowgpt.image.tag="ssadds/vllm:flowgpt-0.23-kv-gemma4" \
+      flowgpt.branch="flowgpt-0.23-kv-gemma4" \
+      flowgpt.vllm.base="v0.23.0" \
+      flowgpt.patches="kv-prefix-cache,gemma4-modelopt-moe" \
+      flowgpt.flashinfer="0.6.8.post1"
+
+# Gemma4 ModelOpt mixed-precision MoE quant lookup
+COPY vllm/model_executor/layers/quantization/modelopt.py \
+     ${PY_SITE}/vllm/model_executor/layers/quantization/modelopt.py
+COPY vllm/model_executor/models/gemma4.py \
+     ${PY_SITE}/vllm/model_executor/models/gemma4.py
+COPY vllm/model_executor/models/gemma4_mm.py \
+     ${PY_SITE}/vllm/model_executor/models/gemma4_mm.py
+
+# Two-phase KV allocation for cross-group prefix cache hits (#44409)
+COPY vllm/v1/core/kv_cache_coordinator.py \
+     ${PY_SITE}/vllm/v1/core/kv_cache_coordinator.py
+COPY vllm/v1/core/single_type_kv_cache_manager.py \
+     ${PY_SITE}/vllm/v1/core/single_type_kv_cache_manager.py
+
+COPY docker/flowgpt/install-flashinfer.sh /tmp/install-flashinfer.sh
+
+RUN chmod +x /tmp/install-flashinfer.sh && \
+    /tmp/install-flashinfer.sh "${FLASHINFER_SOURCE}" \
+        "${PY_SITE}" "${FLASHINFER_VERSION}" "${FLASHINFER_CUDA}" && \
+    rm -f /tmp/install-flashinfer.sh
+
+ENV FLASHINFER_DISABLE_VERSION_CHECK=1
+
+RUN python3 -c "import flashinfer, vllm; print('flashinfer', flashinfer.__version__); print('vllm', vllm.__version__)"
+
+ENTRYPOINT []
+CMD []

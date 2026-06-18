@@ -249,3 +249,6 @@ vllm/grpc/vllm_engine_pb2.pyi
 
 # Ignore generated cpu headers 
 csrc/cpu/cpu_attn_dispatch_generated.h
+
+# Offline flashinfer package extract (docker/flowgpt/extract-flashinfer-packages.sh)
+docker/flowgpt/fi068-packages/
