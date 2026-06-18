@@ -1,0 +1,57 @@
+# ssadds/vllm:kaon-0.22-v1.2
+#
+# Reproduces the production kaon image:
+#   1. upstream prebuilt base at 4721bb3aa
+#   2. fork patch overlay (kaon-0.22-v1.2 branch source)
+#   3. flashinfer 0.6.8.post1 replacement
+#
+# Build (from repo root, on branch kaon-0.22-v1.2):
+#   docker/kaon/build-kaon-0.22-v1.2.sh
+#
+# Bit-exact flashinfer layer (optional, ~11 GB local packages):
+#   docker/kaon/extract-flashinfer-packages.sh
+#   docker/kaon/build-kaon-0.22-v1.2.sh --flashinfer-source=local
+
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:nightly-4721bb3aa43078167eb893a9ebf9e50565030c1c
+FROM ${VLLM_BASE_IMAGE}
+
+ARG PY_SITE=/usr/local/lib/python3.12/dist-packages
+ARG FLASHINFER_VERSION=0.6.8.post1
+ARG FLASHINFER_CUDA=cu130
+# pip | local  (local = COPY docker/kaon/fi068-packages, run extract script first)
+ARG FLASHINFER_SOURCE=pip
+
+LABEL kaon.image.tag="ssadds/vllm:kaon-0.22-v1.2" \
+      kaon.vllm.base.commit="4721bb3aa43078167eb893a9ebf9e50565030c1c" \
+      kaon.branch="kaon-0.22-v1.2"
+
+# Fork patches — must match kaon-0.22-v1.2 branch tip.
+COPY vllm/model_executor/layers/quantization/modelopt.py \
+     ${PY_SITE}/vllm/model_executor/layers/quantization/modelopt.py
+COPY vllm/model_executor/models/gemma4.py \
+     ${PY_SITE}/vllm/model_executor/models/gemma4.py
+COPY vllm/model_executor/models/gemma4_mm.py \
+     ${PY_SITE}/vllm/model_executor/models/gemma4_mm.py
+COPY vllm/model_executor/layers/fused_moe/experts/cutlass_moe.py \
+     ${PY_SITE}/vllm/model_executor/layers/fused_moe/experts/cutlass_moe.py
+COPY vllm/v1/core/kv_cache_coordinator.py \
+     ${PY_SITE}/vllm/v1/core/kv_cache_coordinator.py
+COPY vllm/v1/core/single_type_kv_cache_manager.py \
+     ${PY_SITE}/vllm/v1/core/single_type_kv_cache_manager.py
+
+# Production clears the default entrypoint; K8s supplies `vllm serve ...`.
+ENTRYPOINT []
+CMD []
+
+COPY docker/kaon/install-flashinfer.sh /tmp/install-flashinfer.sh
+# Populated by docker/kaon/extract-flashinfer-packages.sh (gitignored, ~11 GB).
+COPY docker/kaon/fi068-packages /tmp/fi068-packages
+
+RUN chmod +x /tmp/install-flashinfer.sh && \
+    /tmp/install-flashinfer.sh "${FLASHINFER_SOURCE}" \
+        "${PY_SITE}" "${FLASHINFER_VERSION}" "${FLASHINFER_CUDA}" && \
+    rm -f /tmp/install-flashinfer.sh
+
+ENV FLASHINFER_DISABLE_VERSION_CHECK=1
+
+RUN python3 -c "import flashinfer; print('flashinfer', flashinfer.__version__)"
