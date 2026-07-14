@@ -242,6 +242,9 @@ if TYPE_CHECKING:
     VLLM_CUSTOM_SCOPES_FOR_PROFILING: bool = False
     VLLM_NVTX_SCOPES_FOR_PROFILING: bool = False
     VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES: bool = True
+    VLLM_KV_EVICT_TRUNC: bool = False
+    VLLM_KV_EVICT_TRUNC_MAX_CONVS: int = 8192
+    VLLM_KV_EVICT_TRUNC_TTL_SEC: int = 1800
     VLLM_OBJECT_STORAGE_SHM_BUFFER_NAME: str = "VLLM_OBJECT_STORAGE_SHM_BUFFER"
     VLLM_DEEPEP_BUFFER_SIZE_MB: int = 1024
     VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE: bool = False
@@ -1816,6 +1819,19 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # raw bytes. Defaults to True for backward compatibility.
     "VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES": lambda: bool(
         int(os.getenv("VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES", "1"))
+    ),
+    # Truncation-aware KV eviction: when a request carries
+    # kv_transfer_params={"conversation_id": ..., "truncated": true}, evict
+    # the conversation's previous KV chain beyond the shared prefix (GPU
+    # prefix cache and CPU offload pool) so it is reused first.
+    "VLLM_KV_EVICT_TRUNC": lambda: bool(int(os.getenv("VLLM_KV_EVICT_TRUNC", "0"))),
+    # Max conversations tracked for truncation-aware eviction (LRU).
+    "VLLM_KV_EVICT_TRUNC_MAX_CONVS": lambda: int(
+        os.getenv("VLLM_KV_EVICT_TRUNC_MAX_CONVS", "8192")
+    ),
+    # TTL in seconds for tracked conversations.
+    "VLLM_KV_EVICT_TRUNC_TTL_SEC": lambda: int(
+        os.getenv("VLLM_KV_EVICT_TRUNC_TTL_SEC", "1800")
     ),
     # Name of the shared memory buffer used for object storage.
     # Only effective when mm_config.mm_processor_cache_type == "shm".

@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import itertools
 import time
+
+import vllm.envs as envs
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import replace
@@ -30,6 +32,7 @@ from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
 from vllm.multimodal.encoder_budget import MultiModalBudget
 from vllm.multimodal.utils import get_mm_features_in_window
+from vllm.v1.core.conversation_kv_registry import ConversationKVRegistry
 from vllm.v1.core.encoder_cache_manager import (
     EncoderCacheManager,
     EncoderDecoderCacheManager,
@@ -246,6 +249,20 @@ class Scheduler(SchedulerInterface):
         # kv_cache_manager is constructed so block_pool is available.
         if self.connector is not None:
             self.connector.bind_gpu_block_pool(self.kv_cache_manager.block_pool)
+
+        # Truncation-aware KV eviction (VLLM_KV_EVICT_TRUNC).
+        self.truncation_evict_registry: ConversationKVRegistry | None = None
+        if envs.VLLM_KV_EVICT_TRUNC and self.cache_config.enable_prefix_caching:
+            self.truncation_evict_registry = ConversationKVRegistry(
+                max_entries=envs.VLLM_KV_EVICT_TRUNC_MAX_CONVS,
+                ttl_sec=envs.VLLM_KV_EVICT_TRUNC_TTL_SEC,
+            )
+            logger.info(
+                "Truncation-aware KV eviction enabled "
+                "(max_convs=%d, ttl=%ds)",
+                envs.VLLM_KV_EVICT_TRUNC_MAX_CONVS,
+                envs.VLLM_KV_EVICT_TRUNC_TTL_SEC,
+            )
 
         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
         self.use_v2_model_runner = vllm_config.use_v2_model_runner
@@ -1817,6 +1834,8 @@ class Scheduler(SchedulerInterface):
                 request.streaming_queue = deque()
             self._enqueue_waiting_request(request)
             self.requests[request.request_id] = request
+            if self.truncation_evict_registry is not None:
+                self._maybe_evict_truncated_prefix(request)
             if self.connector is not None:
                 self.connector.on_new_request(request)
             if self.log_stats:
@@ -1885,10 +1904,77 @@ class Scheduler(SchedulerInterface):
 
         return [(r.request_id, r.client_index) for r in valid_requests]
 
+    def _get_truncation_evict_conv_id(self, request: Request) -> str | None:
+        params = request.kv_transfer_params
+        if not params:
+            return None
+        conv_id = params.get("conversation_id")
+        return conv_id if isinstance(conv_id, str) else None
+
+    def _maybe_evict_truncated_prefix(self, request: Request) -> None:
+        """Evict the conversation's previous KV chain beyond the shared prefix.
+
+        Called when a new request arrives with
+        kv_transfer_params={"conversation_id": ..., "truncated": true}: the
+        client signals that this turn was sliding-window truncated, so the
+        previous turn's KV (recorded in the registry at finish time) can never
+        be prefix-hit again beyond the longest common prefix of the two
+        block-hash chains. Dead blocks are moved to the front of the free
+        queues (GPU prefix cache and, via the connector, the CPU offload
+        pool) to be reused first.
+        """
+        assert self.truncation_evict_registry is not None
+        params = request.kv_transfer_params
+        if not params or not params.get("truncated"):
+            return
+        conv_id = self._get_truncation_evict_conv_id(request)
+        if conv_id is None:
+            return
+        prev_hashes = self.truncation_evict_registry.get(conv_id)
+        if prev_hashes is None:
+            return
+
+        cur_hashes = request.block_hashes
+        lcp_blocks = 0
+        for prev_hash, cur_hash in zip(prev_hashes, cur_hashes):
+            if prev_hash != cur_hash:
+                break
+            lcp_blocks += 1
+        if lcp_blocks >= len(prev_hashes):
+            return
+
+        num_evicted, num_skipped = self.kv_cache_manager.evict_truncated_prefix(
+            prev_hashes, lcp_blocks
+        )
+        num_evicted_offload = 0
+        num_skipped_offload = 0
+        if self.connector is not None:
+            num_evicted_offload, num_skipped_offload = (
+                self.connector.evict_cached_hashes(prev_hashes, lcp_blocks)
+            )
+        # Unconditional INFO so operators can distinguish "flag never
+        # reached" from "walked and found 0 matches".
+        logger.info(
+            "Truncation evict: conv=%s prev_blocks=%d lcp_blocks=%d "
+            "evicted_gpu=%d skipped_gpu=%d evicted_offload=%d skipped_offload=%d",
+            conv_id,
+            len(prev_hashes),
+            lcp_blocks,
+            num_evicted,
+            num_skipped,
+            num_evicted_offload,
+            num_skipped_offload,
+        )
+
     def _free_request(
         self, request: Request, delay_free_blocks: bool = False
     ) -> dict[str, Any] | None:
         assert request.is_finished()
+
+        if self.truncation_evict_registry is not None:
+            conv_id = self._get_truncation_evict_conv_id(request)
+            if conv_id is not None and request.block_hashes:
+                self.truncation_evict_registry.record(conv_id, request.block_hashes)
 
         self._inflight_prefills.discard(request)
         connector_delay_free_blocks, kv_xfer_params = self._connector_finished(request)

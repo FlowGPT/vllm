@@ -3,7 +3,7 @@
 """Scheduler-side manager for SimpleCPUOffloadConnector."""
 
 import contextlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -12,7 +12,7 @@ from vllm.distributed.kv_events import KVCacheEvent
 from vllm.distributed.kv_transfer.kv_connector.utils import yield_req_data
 from vllm.logger import init_logger
 from vllm.utils.math_utils import cdiv
-from vllm.v1.core.block_pool import BlockPool
+from vllm.v1.core.block_pool import BlockPool, evict_truncated_prefix_blocks
 from vllm.v1.core.kv_cache_coordinator import (
     KVCacheCoordinator,
     get_kv_cache_coordinator,
@@ -31,7 +31,7 @@ from vllm.v1.simple_kv_offload.metadata import (
 
 if TYPE_CHECKING:
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
-    from vllm.v1.core.kv_cache_utils import KVCacheBlock
+    from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
     from vllm.v1.kv_cache_interface import KVCacheConfig
     from vllm.v1.request import Request
 
@@ -769,6 +769,25 @@ class SimpleCPUOffloadScheduler:
         block_ids: tuple[list[int], ...],
     ) -> tuple[bool, dict[str, Any] | None]:
         return self.request_finished(request, block_ids=[])
+
+    def evict_cached_hashes(
+        self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
+    ) -> tuple[int, int]:
+        """Evict dead truncation blocks from the CPU offload pool.
+
+        The CPU pool mirrors the GPU BlockPool structure (same kv_cache_groups
+        and hash keys), so this reuses the same eviction helper: dead blocks
+        are dropped from the CPU prefix cache and moved to the front of the
+        CPU free queue, returning their capacity to live conversations.
+        Blocks pinned by in-flight loads (ref_cnt > 0) are skipped.
+        """
+        return evict_truncated_prefix_blocks(
+            self.cpu_block_pool,
+            self.cpu_kv_cache_config.kv_cache_groups,
+            self.hash_block_size,
+            prev_block_hashes,
+            lcp_blocks,
+        )
 
     def _free_pending_cpu_hit(self, pending: tuple) -> None:
         """Release the temporary CPU block pin taken in get_num_new_matched_tokens()."""

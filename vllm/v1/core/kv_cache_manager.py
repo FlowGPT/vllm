@@ -8,9 +8,10 @@ from typing import Literal, overload
 
 from vllm.distributed.kv_events import BlockStored, KVCacheEvent
 from vllm.logger import init_logger
+from vllm.v1.core.block_pool import evict_truncated_prefix_blocks
 from vllm.v1.core.kv_cache_coordinator import get_kv_cache_coordinator
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
-from vllm.v1.core.kv_cache_utils import KVCacheBlock
+from vllm.v1.core.kv_cache_utils import BlockHash, KVCacheBlock
 from vllm.v1.kv_cache_interface import (
     KVCacheConfig,
     get_kv_cache_spec_kind,
@@ -155,6 +156,7 @@ class KVCacheManager:
         self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
         self.block_pool = self.coordinator.block_pool
         self.kv_cache_config = kv_cache_config
+        self.hash_block_size = hash_block_size
         self.kv_cache_event_metadata = tuple(
             (
                 get_kv_cache_spec_kind(group.kv_cache_spec).value,
@@ -465,6 +467,25 @@ class KVCacheManager:
             block_ids: Set of block IDs to evict from cache.
         """
         self.block_pool.evict_blocks(block_ids)
+
+    def evict_truncated_prefix(
+        self, prev_block_hashes: Sequence[BlockHash], lcp_blocks: int
+    ) -> tuple[int, int]:
+        """Evict the dead suffix of a truncated conversation's previous KV
+        chain across all KV cache groups; see evict_truncated_prefix_blocks.
+
+        Returns:
+            (num_evicted, num_skipped_active).
+        """
+        if not self.enable_caching:
+            return 0, 0
+        return evict_truncated_prefix_blocks(
+            self.block_pool,
+            self.kv_cache_config.kv_cache_groups,
+            self.hash_block_size,
+            prev_block_hashes,
+            lcp_blocks,
+        )
 
     def reset_prefix_cache(self) -> bool:
         """Reset prefix cache. This function may be used in RLHF

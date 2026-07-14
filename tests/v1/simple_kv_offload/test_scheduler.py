@@ -1354,3 +1354,47 @@ def test_toctou_cpu_hit_evicted_between_phases_no_crash() -> None:
     )
     assert len(meta_b.load_gpu_blocks) == 2
     assert len(meta_b.load_cpu_blocks) == 2
+
+
+# ---------------------------------------------------------------------------
+# Truncation-aware eviction of the CPU offload pool (evict_cached_hashes)
+# ---------------------------------------------------------------------------
+def test_evict_cached_hashes_drops_dead_cpu_blocks() -> None:
+    """Eager: after offloading a request's blocks to CPU, evicting its
+    truncated (dead) suffix drops the CPU copies and moves them to the
+    front of the CPU free queue, while the shared prefix stays cached."""
+    fix = make_scheduler(num_cpu_blocks=8, num_gpu_blocks=16, lazy=False)
+    sched = fix.scheduler
+
+    num_blocks = 3
+    req = make_request(num_blocks=num_blocks)
+    kv_blocks = _alloc_and_register(fix, req, num_blocks)
+    sched.update_state_after_alloc(req, kv_blocks, num_external_tokens=0)
+    sched_out = make_scheduler_output(
+        {req.request_id: num_blocks * BLOCK_SIZE},
+        new_reqs={req.request_id: kv_blocks.get_block_ids()},
+    )
+    meta = sched.build_connector_meta(sched_out)
+    assert meta.store_event >= 0
+    simulate_store_completion(sched, meta.store_event)
+
+    cpu_pool = sched.cpu_block_pool
+    keys = [make_block_hash_with_group_id(h, 0) for h in req.block_hashes]
+    dead_cpu_ids = [
+        cpu_pool.cached_block_hash_to_block.get_one_block(k).block_id
+        for k in keys[1:]
+    ]
+
+    # LCP = 1: only the first block is shared with the truncated new turn.
+    assert sched.evict_cached_hashes(req.block_hashes, lcp_blocks=1) == (2, 0)
+
+    assert cpu_pool.cached_block_hash_to_block.get_one_block(keys[0]) is not None
+    assert cpu_pool.cached_block_hash_to_block.get_one_block(keys[1]) is None
+    assert cpu_pool.cached_block_hash_to_block.get_one_block(keys[2]) is None
+
+    # Dead CPU blocks are the next ones handed out, tail-most first.
+    front = cpu_pool.free_block_queue.get_all_free_blocks()[:2]
+    assert [b.block_id for b in front] == dead_cpu_ids[::-1]
+
+    # Repeated call is a no-op.
+    assert sched.evict_cached_hashes(req.block_hashes, lcp_blocks=1) == (0, 0)

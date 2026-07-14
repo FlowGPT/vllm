@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """SimpleCPUOffloadConnector: minimal CPU KV cache offloading."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from vllm.v1.attention.backend import AttentionMetadata
     from vllm.v1.core.block_pool import BlockPool
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+    from vllm.v1.core.kv_cache_utils import BlockHash
     from vllm.v1.kv_cache_interface import KVCacheConfig
     from vllm.v1.request import Request
 
@@ -233,6 +234,15 @@ class SimpleCPUOffloadConnector(KVConnectorBase_V1, SupportsHMA):
                 request, block_ids
             )
         return False, None
+
+    def evict_cached_hashes(
+        self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
+    ) -> tuple[int, int]:
+        if self.scheduler_manager is not None:
+            return self.scheduler_manager.evict_cached_hashes(
+                prev_block_hashes, lcp_blocks
+            )
+        return 0, 0
 
     # NOTE: New API only for SimpleCPUOffloadConnector.
     def has_pending_transfers(self) -> bool:

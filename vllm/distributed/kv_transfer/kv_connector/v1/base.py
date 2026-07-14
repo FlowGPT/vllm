@@ -42,7 +42,7 @@ The class provides the following primitives:
 
 import enum
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from vllm.forward_context import ForwardContext
     from vllm.v1.core.block_pool import BlockPool
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+    from vllm.v1.core.kv_cache_utils import BlockHash
     from vllm.v1.kv_cache_interface import KVCacheConfig
     from vllm.v1.request import Request
 
@@ -528,6 +529,22 @@ class KVConnectorBase_V1(ABC):
         bookkeeping. The default implementation is a no-op.
         """
         return
+
+    def evict_cached_hashes(
+        self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
+    ) -> tuple[int, int]:
+        """Evict connector-side cached copies of dead truncation blocks.
+
+        Called by the scheduler's truncation-aware eviction (see
+        Scheduler._maybe_evict_truncated_prefix) with the previous turn's
+        block-hash chain and the longest common prefix with the new prompt.
+        Connectors that keep their own prefix cache (e.g. CPU offload) can
+        drop the dead suffix. The default implementation is a no-op.
+
+        Returns:
+            (num_evicted, num_skipped_active).
+        """
+        return 0, 0
 
     def update_connector_output(self, connector_output: KVConnectorOutput):
         """

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import copy
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from vllm.forward_context import ForwardContext
     from vllm.v1.core.block_pool import BlockPool
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+    from vllm.v1.core.kv_cache_utils import BlockHash
     from vllm.v1.kv_cache_interface import KVCacheConfig
     from vllm.v1.request import Request
 
@@ -415,6 +416,17 @@ class MultiConnector(KVConnectorBase_V1, SupportsHMA):
     def on_new_request(self, request: "Request") -> None:
         for c in self._connectors:
             c.on_new_request(request)
+
+    def evict_cached_hashes(
+        self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
+    ) -> tuple[int, int]:
+        num_evicted = 0
+        num_skipped = 0
+        for c in self._connectors:
+            evicted, skipped = c.evict_cached_hashes(prev_block_hashes, lcp_blocks)
+            num_evicted += evicted
+            num_skipped += skipped
+        return num_evicted, num_skipped
 
     def build_connector_meta(
         self, scheduler_output: SchedulerOutput
