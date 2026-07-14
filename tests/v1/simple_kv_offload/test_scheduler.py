@@ -1381,12 +1381,11 @@ def test_evict_cached_hashes_drops_dead_cpu_blocks() -> None:
     cpu_pool = sched.cpu_block_pool
     keys = [make_block_hash_with_group_id(h, 0) for h in req.block_hashes]
     dead_cpu_ids = [
-        cpu_pool.cached_block_hash_to_block.get_one_block(k).block_id
-        for k in keys[1:]
+        cpu_pool.cached_block_hash_to_block.get_one_block(k).block_id for k in keys[1:]
     ]
 
     # LCP = 1: only the first block is shared with the truncated new turn.
-    assert sched.evict_cached_hashes(req.block_hashes, lcp_blocks=1) == (2, 0)
+    assert sched.evict_cached_hashes(req.block_hashes, lcp_blocks=1) == (2, 0, 0)
 
     assert cpu_pool.cached_block_hash_to_block.get_one_block(keys[0]) is not None
     assert cpu_pool.cached_block_hash_to_block.get_one_block(keys[1]) is None
@@ -1397,4 +1396,4 @@ def test_evict_cached_hashes_drops_dead_cpu_blocks() -> None:
     assert [b.block_id for b in front] == dead_cpu_ids[::-1]
 
     # Repeated call is a no-op.
-    assert sched.evict_cached_hashes(req.block_hashes, lcp_blocks=1) == (0, 0)
+    assert sched.evict_cached_hashes(req.block_hashes, lcp_blocks=1) == (0, 0, 2)

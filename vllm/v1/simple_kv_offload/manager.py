@@ -772,14 +772,12 @@ class SimpleCPUOffloadScheduler:
 
     def evict_cached_hashes(
         self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         """Evict dead truncation blocks from the CPU offload pool.
 
         The CPU pool mirrors the GPU BlockPool structure (same kv_cache_groups
-        and hash keys), so this reuses the same eviction helper: dead blocks
-        are dropped from the CPU prefix cache and moved to the front of the
-        CPU free queue, returning their capacity to live conversations.
-        Blocks pinned by in-flight loads (ref_cnt > 0) are skipped.
+        and hash keys), so this reuses evict_truncated_prefix_blocks; see
+        BlockPool.evict_free_cached_blocks for the eviction semantics.
         """
         return evict_truncated_prefix_blocks(
             self.cpu_block_pool,

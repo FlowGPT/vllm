@@ -237,12 +237,12 @@ class SimpleCPUOffloadConnector(KVConnectorBase_V1, SupportsHMA):
 
     def evict_cached_hashes(
         self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         if self.scheduler_manager is not None:
             return self.scheduler_manager.evict_cached_hashes(
                 prev_block_hashes, lcp_blocks
             )
-        return 0, 0
+        return 0, 0, 0
 
     # NOTE: New API only for SimpleCPUOffloadConnector.
     def has_pending_transfers(self) -> bool:

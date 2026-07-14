@@ -5,7 +5,6 @@
 import pytest
 import torch
 
-import vllm.envs as envs
 import vllm.v1.core.conversation_kv_registry as conversation_kv_registry
 from vllm.sampling_params import SamplingParams
 from vllm.utils.hashing import sha256
@@ -22,6 +21,7 @@ from vllm.v1.kv_cache_interface import (
     FullAttentionSpec,
     KVCacheConfig,
     KVCacheGroupSpec,
+    KVCacheTensor,
 )
 from vllm.v1.request import Request, RequestStatus
 
@@ -37,10 +37,25 @@ def _init_hash():
     init_none_hash(sha256)
 
 
+@pytest.fixture
+def _force_platform(monkeypatch):
+    # Force a platform so VllmConfig builds on test machines without a
+    # matching native vLLM build.
+    import vllm.platforms as vllm_platforms
+    from vllm.platforms.cpu import CpuPlatform
+
+    if vllm_platforms._current_platform is None or not (
+        vllm_platforms._current_platform.is_cuda()
+        or vllm_platforms._current_platform.is_cpu()
+    ):
+        monkeypatch.setattr(vllm_platforms, "_current_platform", CpuPlatform())
+
+
 def make_request(
     request_id: str,
     prompt_token_ids: list[int],
     kv_transfer_params: dict | None = None,
+    resumable: bool = False,
 ) -> Request:
     sampling_params = SamplingParams(max_tokens=17)
     sampling_params.update_from_generation_config({}, eos_token_id=100)
@@ -50,6 +65,7 @@ def make_request(
         sampling_params=sampling_params,
         pooling_params=None,
         block_hasher=get_request_block_hasher(BLOCK_SIZE, sha256),
+        resumable=resumable,
     )
     request.kv_transfer_params = kv_transfer_params
     return request
@@ -111,8 +127,7 @@ def test_evict_truncated_prefix_moves_dead_blocks_to_front():
 
     # Truncated new turn shares only the first block: LCP = 1.
     prev_hashes = req0.block_hashes
-    num_evicted, num_skipped = manager.evict_truncated_prefix(prev_hashes, 1)
-    assert (num_evicted, num_skipped) == (2, 0)
+    assert manager.evict_truncated_prefix(prev_hashes, 1) == (2, 0, 0)
 
     # Dead blocks (2, 3) are at the queue front, tail-most first; the shared
     # block (1) is untouched.
@@ -127,7 +142,7 @@ def test_evict_truncated_prefix_moves_dead_blocks_to_front():
     assert [b.block_id for b in new_blocks] == [3, 2]
 
     # A repeated call is a no-op (all misses).
-    assert manager.evict_truncated_prefix(prev_hashes, 1) == (0, 0)
+    assert manager.evict_truncated_prefix(prev_hashes, 1) == (0, 0, 2)
 
 
 def test_evict_truncated_prefix_skips_active_blocks():
@@ -141,11 +156,11 @@ def test_evict_truncated_prefix_skips_active_blocks():
     assert blocks is not None
 
     # Request still holds its blocks: everything must be skipped.
-    assert manager.evict_truncated_prefix(req0.block_hashes, 0) == (0, 3)
+    assert manager.evict_truncated_prefix(req0.block_hashes, 0) == (0, 3, 0)
     assert manager.block_pool.get_cached_block(req0.block_hashes[2], [0]) is not None
 
     manager.free(req0)
-    assert manager.evict_truncated_prefix(req0.block_hashes, 0) == (3, 0)
+    assert manager.evict_truncated_prefix(req0.block_hashes, 0) == (3, 0, 0)
 
 
 def test_evict_truncated_prefix_blocks_multi_group_block_sizes():
@@ -186,10 +201,9 @@ def test_evict_truncated_prefix_blocks_multi_group_block_sizes():
 
     # LCP of 2 hash blocks (32 tokens): group 0 keeps 2 blocks, group 1
     # keeps 1 block.
-    num_evicted, num_skipped = evict_truncated_prefix_blocks(
+    assert evict_truncated_prefix_blocks(
         pool, groups, hash_block_size, prev_hashes, lcp_blocks=2
-    )
-    assert (num_evicted, num_skipped) == (3, 0)
+    ) == (3, 0, 0)
     assert pool.cached_block_hash_to_block.get_one_block(keys[0]) is not None
     assert pool.cached_block_hash_to_block.get_one_block(keys[1]) is not None
     assert pool.cached_block_hash_to_block.get_one_block(keys[2]) is None
@@ -222,21 +236,8 @@ def test_conversation_kv_registry_lru_and_ttl(monkeypatch):
     assert len(registry) == 1
 
 
-def test_scheduler_truncation_evict_end_to_end(monkeypatch):
-    # Force a platform so VllmConfig builds on test machines without a
-    # matching native vLLM build.
-    import vllm.platforms as vllm_platforms
-    from vllm.platforms.cpu import CpuPlatform
-
-    if vllm_platforms._current_platform is None or not (
-        vllm_platforms._current_platform.is_cuda()
-        or vllm_platforms._current_platform.is_cpu()
-    ):
-        monkeypatch.setattr(
-            vllm_platforms, "_current_platform", CpuPlatform(), raising=False
-        )
-
-    monkeypatch.setattr(envs, "VLLM_KV_EVICT_TRUNC", True, raising=False)
+def test_scheduler_truncation_evict_end_to_end(monkeypatch, _force_platform):
+    monkeypatch.setenv("VLLM_KV_EVICT_TRUNC", "1")
     scheduler = create_scheduler(enable_prefix_caching=True, block_size=BLOCK_SIZE)
     assert scheduler.truncation_evict_registry is not None
 
@@ -267,8 +268,7 @@ def test_scheduler_truncation_evict_end_to_end(monkeypatch):
         assert block_pool.get_cached_block(h, [0]) is None
     # Dead blocks sit at the free queue front (tail-most first).
     front_ids = [
-        b.block_id
-        for b in block_pool.free_block_queue.get_all_free_blocks()[:3]
+        b.block_id for b in block_pool.free_block_queue.get_all_free_blocks()[:3]
     ]
     assert front_ids == [4, 3, 2]
 
@@ -276,3 +276,154 @@ def test_scheduler_truncation_evict_end_to_end(monkeypatch):
     req3 = make_request("t3", turn1_prompt, {"conversation_id": "c2"})
     scheduler.add_request(req3)
     assert block_pool.get_cached_block(prev_hashes[0], [0]) is not None
+
+
+def test_evict_free_cached_blocks_evicts_duplicate_blocks():
+    """Two idle blocks cached under the same hash are both evicted."""
+    pool = BlockPool(num_gpu_blocks=4, enable_caching=True, hash_block_size=BLOCK_SIZE)
+    key = make_block_hash_with_group_id(BlockHash(b"\x01" * 32), 0)
+    blocks = pool.get_new_blocks(2)
+    for block in blocks:
+        block._block_hash = key
+        pool.cached_block_hash_to_block.insert(key, block)
+    pool.free_blocks(blocks)
+
+    assert pool.evict_free_cached_blocks([key]) == (2, 0, 0)
+    assert pool.cached_block_hash_to_block.get_one_block(key) is None
+
+
+def test_scheduler_truncation_evict_skips_streaming_requests(
+    monkeypatch, _force_platform
+):
+    """Streaming-input (resumable) requests carry only a partial prompt on
+    arrival, so the LCP would be underestimated; eviction must not run."""
+    monkeypatch.setenv("VLLM_KV_EVICT_TRUNC", "1")
+    scheduler = create_scheduler(enable_prefix_caching=True, block_size=BLOCK_SIZE)
+    assert scheduler.truncation_evict_registry is not None
+
+    turn1_prompt = [i for i in range(4) for _ in range(BLOCK_SIZE)]
+    req1 = make_request("t1", turn1_prompt, {"conversation_id": "c1"})
+    scheduler.add_request(req1)
+    scheduler.schedule()
+    prev_hashes = list(req1.block_hashes)
+    scheduler.finish_requests("t1", RequestStatus.FINISHED_ABORTED)
+
+    # Truncated turn 2 arrives as the first chunk of a streaming session,
+    # sharing only the first block so far.
+    turn2_chunk = turn1_prompt[:BLOCK_SIZE] + [99] * BLOCK_SIZE
+    req2 = make_request(
+        "t2",
+        turn2_chunk,
+        {"conversation_id": "c1", "truncated": True},
+        resumable=True,
+    )
+    scheduler.add_request(req2)
+
+    # Nothing was evicted: later chunks may still hit the previous chain.
+    block_pool = scheduler.kv_cache_manager.block_pool
+    for h in prev_hashes:
+        assert block_pool.get_cached_block(h, [0]) is not None
+
+
+def test_scheduler_truncation_evict_gpu_and_cpu_full_chain(
+    monkeypatch, _force_platform
+):
+    """Plan verification #2: real Scheduler + SimpleCPUOffloadConnector
+    (eager), two-turn conversation with a truncation flag; the dead suffix
+    is dropped from both the GPU prefix cache and the CPU offload pool."""
+    from vllm.config import KVTransferConfig
+    from vllm.distributed.kv_transfer.kv_connector.v1 import KVConnectorRole
+    from vllm.distributed.kv_transfer.kv_connector.v1.simple_cpu_offload_connector import (  # noqa: E501
+        SimpleCPUOffloadConnector,
+    )
+    from vllm.v1.outputs import KVConnectorOutput, ModelRunnerOutput
+    from vllm.v1.simple_kv_offload.metadata import SimpleCPUOffloadWorkerMetadata
+
+    monkeypatch.setenv("VLLM_KV_EVICT_TRUNC", "1")
+    num_gpu_blocks = 64
+    scheduler = create_scheduler(
+        enable_prefix_caching=True, block_size=BLOCK_SIZE, num_blocks=num_gpu_blocks
+    )
+    assert scheduler.truncation_evict_registry is not None
+
+    # Attach a real eager connector with a small CPU pool. The scheduler's
+    # kv_cache_config has empty kv_cache_tensors, which _derive_cpu_config
+    # needs to size the CPU pool, so mirror it with tensors filled in.
+    spec = FullAttentionSpec(
+        block_size=BLOCK_SIZE, num_kv_heads=1, head_size=1, dtype=torch.float32
+    )
+    bytes_per_block = spec.page_size_bytes
+    gpu_kv_config = KVCacheConfig(
+        num_blocks=num_gpu_blocks,
+        kv_cache_tensors=[
+            KVCacheTensor(size=bytes_per_block * num_gpu_blocks, shared_by=["layer"])
+        ],
+        kv_cache_groups=[KVCacheGroupSpec(["layer"], spec)],
+    )
+    scheduler.vllm_config.kv_transfer_config = KVTransferConfig(
+        kv_connector="SimpleCPUOffloadConnector",
+        kv_role="kv_both",
+        kv_connector_extra_config={"cpu_bytes_to_use": bytes_per_block * 8},
+    )
+    connector = SimpleCPUOffloadConnector(
+        scheduler.vllm_config, KVConnectorRole.SCHEDULER, gpu_kv_config
+    )
+    scheduler.connector = connector
+    connector.bind_gpu_block_pool(scheduler.kv_cache_manager.block_pool)
+    offload_manager = connector.scheduler_manager
+    assert offload_manager is not None and not offload_manager._lazy_mode
+
+    # Turn 1: 4 full blocks. Eager mode stores blocks only once their KV is
+    # confirmed computed, so run the prefill step, report a model output,
+    # and let the next (decode) step emit the store event.
+    turn1_prompt = [i for i in range(4) for _ in range(BLOCK_SIZE)]
+    req1 = make_request("t1", turn1_prompt, {"conversation_id": "c1"})
+    scheduler.add_request(req1)
+    prefill_output = scheduler.schedule()
+    scheduler.update_from_output(
+        prefill_output,
+        ModelRunnerOutput(
+            req_ids=["t1"],
+            req_id_to_index={"t1": 0},
+            sampled_token_ids=[[0]],
+            logprobs=None,
+            prompt_logprobs_dict={},
+            pooler_output=[],
+        ),
+    )
+    decode_output = scheduler.schedule()
+    meta = decode_output.kv_connector_metadata
+    assert meta is not None and meta.store_event >= 0
+    connector.update_connector_output(
+        KVConnectorOutput(
+            kv_connector_worker_meta=SimpleCPUOffloadWorkerMetadata(
+                completed_store_events={
+                    meta.store_event: offload_manager._expected_worker_count
+                }
+            )
+        )
+    )
+    prev_hashes = list(req1.block_hashes)
+    scheduler.finish_requests("t1", RequestStatus.FINISHED_ABORTED)
+
+    cpu_pool = offload_manager.cpu_block_pool
+    cpu_keys = [make_block_hash_with_group_id(h, 0) for h in prev_hashes]
+    for key in cpu_keys:
+        assert cpu_pool.cached_block_hash_to_block.get_one_block(key) is not None
+
+    # Turn 2: truncated, shares only the first block.
+    turn2_prompt = turn1_prompt[:BLOCK_SIZE] + [99] * (BLOCK_SIZE * 3)
+    req2 = make_request(
+        "t2", turn2_prompt, {"conversation_id": "c1", "truncated": True}
+    )
+    scheduler.add_request(req2)
+
+    # GPU: dead suffix gone, shared prefix kept.
+    block_pool = scheduler.kv_cache_manager.block_pool
+    assert block_pool.get_cached_block(prev_hashes[0], [0]) is not None
+    for h in prev_hashes[1:]:
+        assert block_pool.get_cached_block(h, [0]) is None
+    # CPU: same.
+    assert cpu_pool.cached_block_hash_to_block.get_one_block(cpu_keys[0]) is not None
+    for key in cpu_keys[1:]:
+        assert cpu_pool.cached_block_hash_to_block.get_one_block(key) is None

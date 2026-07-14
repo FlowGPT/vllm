@@ -470,15 +470,15 @@ class KVCacheManager:
 
     def evict_truncated_prefix(
         self, prev_block_hashes: Sequence[BlockHash], lcp_blocks: int
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         """Evict the dead suffix of a truncated conversation's previous KV
         chain across all KV cache groups; see evict_truncated_prefix_blocks.
 
         Returns:
-            (num_evicted, num_skipped_active).
+            (num_evicted, num_skipped_active, num_missed).
         """
         if not self.enable_caching:
-            return 0, 0
+            return 0, 0, 0
         return evict_truncated_prefix_blocks(
             self.block_pool,
             self.kv_cache_config.kv_cache_groups,

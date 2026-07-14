@@ -2,13 +2,12 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import itertools
 import time
-
-import vllm.envs as envs
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
+import vllm.envs as envs
 from vllm.compilation.cuda_graph import CUDAGraphStat
 from vllm.config import VllmConfig
 from vllm.distributed.ec_transfer.ec_connector.base import (
@@ -258,8 +257,7 @@ class Scheduler(SchedulerInterface):
                 ttl_sec=envs.VLLM_KV_EVICT_TRUNC_TTL_SEC,
             )
             logger.info(
-                "Truncation-aware KV eviction enabled "
-                "(max_convs=%d, ttl=%ds)",
+                "Truncation-aware KV eviction enabled (max_convs=%d, ttl=%ds)",
                 envs.VLLM_KV_EVICT_TRUNC_MAX_CONVS,
                 envs.VLLM_KV_EVICT_TRUNC_TTL_SEC,
             )
@@ -1919,11 +1917,17 @@ class Scheduler(SchedulerInterface):
         client signals that this turn was sliding-window truncated, so the
         previous turn's KV (recorded in the registry at finish time) can never
         be prefix-hit again beyond the longest common prefix of the two
-        block-hash chains. Dead blocks are moved to the front of the free
-        queues (GPU prefix cache and, via the connector, the CPU offload
-        pool) to be reused first.
+        block-hash chains. The dead suffix is demoted on GPU and, via the
+        connector, in the CPU offload pool; see
+        BlockPool.evict_free_cached_blocks for the eviction semantics.
         """
         assert self.truncation_evict_registry is not None
+        if request.resumable:
+            # Streaming-input sessions arrive chunk by chunk; block_hashes of
+            # the first chunk covers only part of the prompt, so the LCP
+            # would be underestimated and shared-prefix blocks beyond the
+            # chunk boundary would be evicted by mistake.
+            return
         params = request.kv_transfer_params
         if not params or not params.get("truncated"):
             return
@@ -1943,27 +1947,31 @@ class Scheduler(SchedulerInterface):
         if lcp_blocks >= len(prev_hashes):
             return
 
-        num_evicted, num_skipped = self.kv_cache_manager.evict_truncated_prefix(
-            prev_hashes, lcp_blocks
+        num_evicted, num_skipped, num_missed = (
+            self.kv_cache_manager.evict_truncated_prefix(prev_hashes, lcp_blocks)
         )
         num_evicted_offload = 0
         num_skipped_offload = 0
+        num_missed_offload = 0
         if self.connector is not None:
-            num_evicted_offload, num_skipped_offload = (
+            num_evicted_offload, num_skipped_offload, num_missed_offload = (
                 self.connector.evict_cached_hashes(prev_hashes, lcp_blocks)
             )
         # Unconditional INFO so operators can distinguish "flag never
         # reached" from "walked and found 0 matches".
         logger.info(
             "Truncation evict: conv=%s prev_blocks=%d lcp_blocks=%d "
-            "evicted_gpu=%d skipped_gpu=%d evicted_offload=%d skipped_offload=%d",
+            "gpu(evicted=%d skipped=%d missed=%d) "
+            "offload(evicted=%d skipped=%d missed=%d)",
             conv_id,
             len(prev_hashes),
             lcp_blocks,
             num_evicted,
             num_skipped,
+            num_missed,
             num_evicted_offload,
             num_skipped_offload,
+            num_missed_offload,
         )
 
     def _free_request(

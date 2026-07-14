@@ -75,6 +75,20 @@ class BlockHashToBlockMap:
             self._unexpected_blocks_type(blocks)
         return None
 
+    def get_all_blocks(self, key: BlockHashWithGroupId) -> list[KVCacheBlock]:
+        """
+        Gets all blocks with the given block hash key (duplicates included).
+        """
+        blocks = self._cache.get(key)
+        if blocks is None:
+            return []
+        if isinstance(blocks, KVCacheBlock):
+            return [blocks]
+        if isinstance(blocks, dict):
+            return list(blocks.values())
+        self._unexpected_blocks_type(blocks)
+        return []
+
     def insert(self, key: BlockHashWithGroupId, block: KVCacheBlock) -> None:
         """
         Inserts the KVCacheBlock to the cache
@@ -445,14 +459,14 @@ class BlockPool:
 
     def evict_free_cached_blocks(
         self, keys: Iterable[BlockHashWithGroupId]
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         """Evict cached-but-idle blocks and make them the next eviction victims.
 
-        For each key, if a cached block exists and is idle (ref_cnt == 0, i.e.
-        sitting in the free queue), remove it from the prefix-cache hash map
-        and move it to the front of the free queue so it is reused before any
-        other cached block. Blocks still referenced (by running requests or
-        in-flight transfers) are skipped.
+        For each key, every cached block with that hash (duplicates included)
+        that is idle (ref_cnt == 0, i.e. sitting in the free queue) is removed
+        from the prefix-cache hash map and moved to the front of the free
+        queue so it is reused before any other cached block. Blocks still
+        referenced (by running requests or in-flight transfers) are skipped.
 
         Used for truncation-aware eviction of KV that can never be hit again;
         see Scheduler._maybe_evict_truncated_prefix.
@@ -461,24 +475,27 @@ class BlockPool:
             keys: Block hash keys in chain order (head to tail).
 
         Returns:
-            (num_evicted, num_skipped_active).
+            (num_evicted, num_skipped_active, num_missed).
         """
         evicted: list[KVCacheBlock] = []
         num_skipped = 0
+        num_missed = 0
         for key in keys:
-            block = self.cached_block_hash_to_block.get_one_block(key)
-            if block is None:
+            blocks = self.cached_block_hash_to_block.get_all_blocks(key)
+            if not blocks:
+                num_missed += 1
                 continue
-            if block.ref_cnt > 0 or block.is_null:
-                num_skipped += 1
-                continue
-            self._maybe_evict_cached_block(block)
-            self.free_block_queue.remove(block)
-            evicted.append(block)
+            for block in blocks:
+                if block.ref_cnt > 0 or block.is_null:
+                    num_skipped += 1
+                    continue
+                self._maybe_evict_cached_block(block)
+                self.free_block_queue.remove(block)
+                evicted.append(block)
         # Reverse so the tail-most block sits at the very front of the queue,
         # mirroring the reversed order used by the normal free path.
         self.free_block_queue.prepend_n(evicted[::-1])
-        return len(evicted), num_skipped
+        return len(evicted), num_skipped, num_missed
 
     def evict_blocks(self, block_ids: set[int]) -> None:
         """evict blocks from the prefix cache by their block IDs.
@@ -574,22 +591,24 @@ def evict_truncated_prefix_blocks(
     hash_block_size: int,
     prev_block_hashes: Sequence[BlockHash],
     lcp_blocks: int,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Evict the dead suffix of a truncated conversation's previous KV chain.
 
     ``prev_block_hashes`` is the block-hash chain (at ``hash_block_size``
-    granularity) of the conversation's previous turn. ``lcp_blocks`` is the
-    longest common prefix (in hash blocks) with the new truncated prompt;
-    everything beyond it has diverged hashes and can never be hit again, so
-    those blocks are moved to the front of the free queue across all KV cache
-    groups. Shared with the CPU offload pool, which mirrors this structure.
+    granularity) of the conversation's previous turn; ``lcp_blocks`` is its
+    longest common prefix (in hash blocks) with the new truncated prompt.
+    Converts the dead suffix to each group's block size and hands it to
+    ``BlockPool.evict_free_cached_blocks`` (see there for the eviction
+    semantics). Shared with the CPU offload pool, which mirrors this
+    structure.
 
     Returns:
-        (num_evicted, num_skipped_active) summed over groups.
+        (num_evicted, num_skipped_active, num_missed) summed over groups.
     """
     lcp_tokens = lcp_blocks * hash_block_size
     num_evicted = 0
     num_skipped = 0
+    num_missed = 0
     for group_id, group in enumerate(kv_cache_groups):
         block_size = group.kv_cache_spec.block_size
         if block_size == hash_block_size:
@@ -606,7 +625,8 @@ def evict_truncated_prefix_blocks(
             make_block_hash_with_group_id(block_hashes[i], group_id)
             for i in range(num_alive_blocks, len(block_hashes))
         )
-        evicted, skipped = block_pool.evict_free_cached_blocks(keys)
+        evicted, skipped, missed = block_pool.evict_free_cached_blocks(keys)
         num_evicted += evicted
         num_skipped += skipped
-    return num_evicted, num_skipped
+        num_missed += missed
+    return num_evicted, num_skipped, num_missed

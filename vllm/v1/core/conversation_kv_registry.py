@@ -2,10 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Per-conversation record of the last turn's KV block hashes.
 
-Used by truncation-aware eviction (VLLM_KV_EVICT_TRUNC): when a multi-turn
-chat client reports that a turn was sliding-window truncated, the scheduler
-compares the new prompt's block-hash chain against the conversation's
-previous chain recorded here to find blocks that can never be hit again.
+Used by truncation-aware eviction (VLLM_KV_EVICT_TRUNC); see
+Scheduler._maybe_evict_truncated_prefix.
 """
 
 import time
@@ -28,7 +26,7 @@ class ConversationKVRegistry:
         self.max_entries = max_entries
         self.ttl_sec = ttl_sec
         # conversation_id -> (record_time, block_hashes)
-        self._entries: OrderedDict[str, tuple[float, tuple["BlockHash", ...]]] = (
+        self._entries: OrderedDict[str, tuple[float, tuple[BlockHash, ...]]] = (
             OrderedDict()
         )
 

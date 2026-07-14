@@ -419,14 +419,18 @@ class MultiConnector(KVConnectorBase_V1, SupportsHMA):
 
     def evict_cached_hashes(
         self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         num_evicted = 0
         num_skipped = 0
+        num_missed = 0
         for c in self._connectors:
-            evicted, skipped = c.evict_cached_hashes(prev_block_hashes, lcp_blocks)
+            evicted, skipped, missed = c.evict_cached_hashes(
+                prev_block_hashes, lcp_blocks
+            )
             num_evicted += evicted
             num_skipped += skipped
-        return num_evicted, num_skipped
+            num_missed += missed
+        return num_evicted, num_skipped, num_missed
 
     def build_connector_meta(
         self, scheduler_output: SchedulerOutput

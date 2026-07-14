@@ -1820,10 +1820,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES": lambda: bool(
         int(os.getenv("VLLM_KV_EVENTS_USE_INT_BLOCK_HASHES", "1"))
     ),
-    # Truncation-aware KV eviction: when a request carries
-    # kv_transfer_params={"conversation_id": ..., "truncated": true}, evict
-    # the conversation's previous KV chain beyond the shared prefix (GPU
-    # prefix cache and CPU offload pool) so it is reused first.
+    # Truncation-aware KV eviction, triggered by
+    # kv_transfer_params={"conversation_id": ..., "truncated": true};
+    # see Scheduler._maybe_evict_truncated_prefix.
     "VLLM_KV_EVICT_TRUNC": lambda: bool(int(os.getenv("VLLM_KV_EVICT_TRUNC", "0"))),
     # Max conversations tracked for truncation-aware eviction (LRU).
     "VLLM_KV_EVICT_TRUNC_MAX_CONVS": lambda: int(

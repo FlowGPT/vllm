@@ -532,7 +532,7 @@ class KVConnectorBase_V1(ABC):
 
     def evict_cached_hashes(
         self, prev_block_hashes: Sequence["BlockHash"], lcp_blocks: int
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         """Evict connector-side cached copies of dead truncation blocks.
 
         Called by the scheduler's truncation-aware eviction (see
@@ -542,9 +542,9 @@ class KVConnectorBase_V1(ABC):
         drop the dead suffix. The default implementation is a no-op.
 
         Returns:
-            (num_evicted, num_skipped_active).
+            (num_evicted, num_skipped_active, num_missed).
         """
-        return 0, 0
+        return 0, 0, 0
 
     def update_connector_output(self, connector_output: KVConnectorOutput):
         """
