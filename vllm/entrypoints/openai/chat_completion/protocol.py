@@ -402,6 +402,17 @@ class ChatCompletionRequest(OpenAIBaseModel):
         description="KVTransfer parameters used for disaggregated serving.",
     )
 
+    enable_kv_evict: bool = Field(
+        default=False,
+        description=(
+            "Set by the client when this turn's history was sliding-window "
+            "truncated. Combined with the X-Flow-Conversation-Id header, it "
+            "drives truncation-aware KV eviction (VLLM_KV_EVICT_TRUNC); see "
+            "Scheduler._maybe_evict_truncated_prefix. No effect when the "
+            "feature is disabled."
+        ),
+    )
+
     vllm_xargs: dict[str, str | int | float | list[str | int | float]] | None = Field(
         default=None,
         description=(
@@ -550,6 +561,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
         self,
         max_tokens: int,
         default_sampling_params: dict,
+        conversation_id: str | None = None,
     ) -> SamplingParams:
         # Default parameters
         if (repetition_penalty := self.repetition_penalty) is None:
@@ -611,9 +623,20 @@ class ChatCompletionRequest(OpenAIBaseModel):
                 )
 
         extra_args: dict[str, Any] = self.vllm_xargs if self.vllm_xargs else {}
-        if self.kv_transfer_params:
-            # Pass in kv_transfer_params via extra_args
-            extra_args["kv_transfer_params"] = self.kv_transfer_params
+        # kv_transfer_params keeps client-set disaggregated-serving fields, but
+        # the truncation-eviction keys are derived here from the
+        # X-Flow-Conversation-Id header and the enable_kv_evict flag, never the
+        # client body -- so a client cannot forge an eviction target. The
+        # scheduler reads conversation_id/truncated off kv_transfer_params.
+        kv_transfer_params = dict(self.kv_transfer_params or {})
+        kv_transfer_params.pop("conversation_id", None)
+        kv_transfer_params.pop("truncated", None)
+        if conversation_id:
+            kv_transfer_params["conversation_id"] = conversation_id
+            if self.enable_kv_evict:
+                kv_transfer_params["truncated"] = True
+        if kv_transfer_params:
+            extra_args["kv_transfer_params"] = kv_transfer_params
         return SamplingParams.from_optional(
             n=self.n,
             presence_penalty=self.presence_penalty,

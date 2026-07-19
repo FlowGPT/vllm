@@ -268,6 +268,10 @@ class OpenAIServingChat(OpenAIServing):
         # Extract data_parallel_rank from header (router can inject it)
         data_parallel_rank = self._get_data_parallel_rank(raw_request)
 
+        # Conversation id (X-Flow-Conversation-Id) drives truncation-aware
+        # KV eviction; passed into to_sampling_params below.
+        conversation_id = self._get_conversation_id(raw_request)
+
         # Schedule the request and get the result generator.
         max_model_len = self.model_config.max_model_len
         generators: list[AsyncGenerator[RequestOutput, None]] = []
@@ -300,6 +304,7 @@ class OpenAIServingChat(OpenAIServing):
                 sampling_params = request.to_sampling_params(
                     max_tokens,
                     self.default_sampling_params,
+                    conversation_id=conversation_id,
                 )
 
             self._log_inputs(

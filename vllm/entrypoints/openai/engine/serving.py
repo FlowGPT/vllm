@@ -410,6 +410,18 @@ class OpenAIServing(BeamSearchOnlineMixin):
         except ValueError:
             return None
 
+    @staticmethod
+    def _get_conversation_id(raw_request: Request | None) -> str | None:
+        """Pulls the conversation id from the X-Flow-Conversation-Id header.
+
+        Used by truncation-aware KV eviction to link a chat's turns across
+        requests; see Scheduler._maybe_evict_truncated_prefix.
+        """
+        if raw_request is None:
+            return None
+        conv_id = raw_request.headers.get("X-Flow-Conversation-Id")
+        return conv_id or None
+
     async def _with_kv_transfer_rejection_cleanup(
         self,
         awaitable: Awaitable[_T],
