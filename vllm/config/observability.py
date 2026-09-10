@@ -95,6 +95,10 @@ class ObservabilityConfig:
     """Log every monitored JIT compile with runtime details. This can emit many
     logs and add overhead, so it is intended for debugging."""
 
+    request_token_length_buckets: list[int] = Field(default_factory=list)
+    """Extra ``le`` bounds for ``vllm:request_prompt_tokens`` and
+    ``vllm:request_generation_tokens`` only. Default 1-2-5 buckets are kept."""
+
     @cached_property
     def collect_model_forward_time(self) -> bool:
         """Whether to collect model forward time for the request."""
@@ -148,6 +152,16 @@ class ObservabilityConfig:
                     "OpenTelemetry is not available. Unable to configure "
                     "'otlp_traces_endpoint'. Ensure OpenTelemetry packages are "
                     f"installed. Original error:\n{otel_import_error_traceback}"
+                )
+        return value
+
+    @field_validator("request_token_length_buckets")
+    @classmethod
+    def _validate_request_token_length_buckets(cls, value: list[int]) -> list[int]:
+        for bucket in value:
+            if bucket <= 0:
+                raise ValueError(
+                    "request_token_length_buckets values must be positive integers"
                 )
         return value
 

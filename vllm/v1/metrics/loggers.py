@@ -468,6 +468,15 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
         labelnames = ["model_name", "engine"]
         model_name = vllm_config.model_config.served_model_name
         max_model_len = vllm_config.model_config.max_model_len
+        default_token_buckets = build_1_2_5_buckets(max_model_len)
+        extra_io_token_buckets = (
+            vllm_config.observability_config.request_token_length_buckets
+        )
+        request_io_token_buckets = (
+            build_request_token_length_buckets(max_model_len, extra_io_token_buckets)
+            if extra_io_token_buckets
+            else default_token_buckets
+        )
 
         self.per_engine_labelvalues: dict[int, list[object]] = {
             idx: [model_name, str(idx)] for idx in engine_indexes
@@ -730,7 +739,7 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
         histogram_num_prompt_tokens_request = self._histogram_cls(
             name="vllm:request_prompt_tokens",
             documentation="Number of prefill tokens processed.",
-            buckets=build_1_2_5_buckets(max_model_len),
+            buckets=request_io_token_buckets,
             labelnames=labelnames,
         )
         self.histogram_num_prompt_tokens_request = create_metric_per_engine(
@@ -740,7 +749,7 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
         histogram_num_generation_tokens_request = self._histogram_cls(
             name="vllm:request_generation_tokens",
             documentation="Number of generation tokens processed.",
-            buckets=build_1_2_5_buckets(max_model_len),
+            buckets=request_io_token_buckets,
             labelnames=labelnames,
         )
         self.histogram_num_generation_tokens_request = create_metric_per_engine(
@@ -763,7 +772,7 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
         histogram_max_num_generation_tokens_request = self._histogram_cls(
             name="vllm:request_max_num_generation_tokens",
             documentation="Histogram of maximum number of requested generation tokens.",
-            buckets=build_1_2_5_buckets(max_model_len),
+            buckets=default_token_buckets,
             labelnames=labelnames,
         )
         self.histogram_max_num_generation_tokens_request = create_metric_per_engine(
@@ -783,7 +792,7 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
         histogram_max_tokens_request = self._histogram_cls(
             name="vllm:request_params_max_tokens",
             documentation="Histogram of the max_tokens request parameter.",
-            buckets=build_1_2_5_buckets(max_model_len),
+            buckets=default_token_buckets,
             labelnames=labelnames,
         )
         self.histogram_max_tokens_request = create_metric_per_engine(
@@ -965,7 +974,7 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
                 "Histogram of new KV tokens computed during prefill "
                 "(excluding cached tokens)."
             ),
-            buckets=build_1_2_5_buckets(max_model_len),
+            buckets=default_token_buckets,
             labelnames=labelnames,
         )
         self.histogram_prefill_kv_computed_request = create_metric_per_engine(
@@ -1306,6 +1315,20 @@ def build_1_2_5_buckets(max_value: int) -> list[int]:
     [1, 2, 5, 10, 20, 50, 100]
     """
     return build_buckets([1, 2, 5], max_value)
+
+
+def build_request_token_length_buckets(
+    max_value: int,
+    extra_buckets: list[int] | None = None,
+) -> list[int]:
+    """1-2-5 buckets with optional extra ``le`` boundaries within max_value."""
+    buckets = build_1_2_5_buckets(max_value)
+    if not extra_buckets:
+        return buckets
+    merged = sorted(
+        set(buckets) | {bucket for bucket in extra_buckets if bucket <= max_value}
+    )
+    return merged
 
 
 class StatLoggerManager:

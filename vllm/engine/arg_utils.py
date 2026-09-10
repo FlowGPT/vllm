@@ -719,6 +719,9 @@ class EngineArgs:
     )
     jit_monitor_mode: Literal["warn", "error"] = ObservabilityConfig.jit_monitor_mode
     jit_monitor_verbose: bool = ObservabilityConfig.jit_monitor_verbose
+    request_token_length_buckets: list[int] = (
+        ObservabilityConfig.request_token_length_buckets
+    )
     enable_mm_processor_stats: bool = ObservabilityConfig.enable_mm_processor_stats
     scheduling_policy: SchedulerPolicy = SchedulerConfig.policy
     scheduler_cls: str | type[object] | None = SchedulerConfig.scheduler_cls
@@ -1571,6 +1574,10 @@ class EngineArgs:
             "--jit-monitor-verbose",
             **observability_kwargs["jit_monitor_verbose"],
         )
+        observability_group.add_argument(
+            "--request-token-length-buckets",
+            **observability_kwargs["request_token_length_buckets"],
+        )
 
         # Scheduler arguments
         scheduler_kwargs = get_kwargs(SchedulerConfig)
@@ -2015,6 +2022,7 @@ class EngineArgs:
             enable_logging_iteration_details=self.enable_logging_iteration_details,
             jit_monitor_mode=self.jit_monitor_mode,
             jit_monitor_verbose=self.jit_monitor_verbose,
+            request_token_length_buckets=self.request_token_length_buckets,
         )
 
     def create_engine_config(
