@@ -215,6 +215,42 @@ def test_jit_monitor_verbose_arg():
     assert EngineArgs(model="test", jit_monitor_verbose=True).jit_monitor_verbose
 
 
+def test_request_token_length_bucket_args_are_independent():
+    parser = EngineArgs.add_cli_args(FlexibleArgumentParser())
+    args = parser.parse_args(
+        [
+            "--request-prompt-token-length-buckets",
+            "6000",
+            "6500",
+            "--request-generation-token-length-buckets",
+            "100",
+            "200",
+        ]
+    )
+
+    engine_args = EngineArgs.from_cli_args(args)
+    assert engine_args.request_prompt_token_length_buckets == [6000, 6500]
+    assert engine_args.request_generation_token_length_buckets == [100, 200]
+
+    observability_config = engine_args.create_observability_config()
+    assert observability_config.request_prompt_token_length_buckets == [6000, 6500]
+    assert observability_config.request_generation_token_length_buckets == [100, 200]
+
+
+def test_shared_request_token_length_bucket_arg_is_removed():
+    parser = EngineArgs.add_cli_args(FlexibleArgumentParser(exit_on_error=False))
+
+    with pytest.raises(ArgumentError):
+        parser.parse_args(["--request-token-length-buckets", "6000"])
+
+
+def test_request_token_length_bucket_args_default_to_empty_lists():
+    observability_config = EngineArgs(model="test").create_observability_config()
+
+    assert observability_config.request_prompt_token_length_buckets == []
+    assert observability_config.request_generation_token_length_buckets == []
+
+
 @pytest.mark.parametrize("mode", ["warn", "error"])
 def test_jit_monitor_mode_arg(mode):
     parser = EngineArgs.add_cli_args(FlexibleArgumentParser())

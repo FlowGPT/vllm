@@ -95,9 +95,13 @@ class ObservabilityConfig:
     """Log every monitored JIT compile with runtime details. This can emit many
     logs and add overhead, so it is intended for debugging."""
 
-    request_token_length_buckets: list[int] = Field(default_factory=list)
-    """Extra ``le`` bounds for ``vllm:request_prompt_tokens`` and
-    ``vllm:request_generation_tokens`` only. Default 1-2-5 buckets are kept."""
+    request_prompt_token_length_buckets: list[int] = Field(default_factory=list)
+    """Extra ``le`` bounds for ``vllm:request_prompt_tokens``. Default 1-2-5
+    buckets are kept."""
+
+    request_generation_token_length_buckets: list[int] = Field(default_factory=list)
+    """Extra ``le`` bounds for ``vllm:request_generation_tokens``. Default 1-2-5
+    buckets are kept."""
 
     @cached_property
     def collect_model_forward_time(self) -> bool:
@@ -155,14 +159,15 @@ class ObservabilityConfig:
                 )
         return value
 
-    @field_validator("request_token_length_buckets")
+    @field_validator(
+        "request_prompt_token_length_buckets",
+        "request_generation_token_length_buckets",
+    )
     @classmethod
     def _validate_request_token_length_buckets(cls, value: list[int]) -> list[int]:
         for bucket in value:
             if bucket <= 0:
-                raise ValueError(
-                    "request_token_length_buckets values must be positive integers"
-                )
+                raise ValueError("bucket values must be positive integers")
         return value
 
     @field_validator("collect_detailed_traces")
